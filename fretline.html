@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Fretline — Tab Practice</title>
+<style>
+  :root {
+    --bg: #15130F;
+    --bg-raised: #1D1A14;
+    --line: #332D22;
+    --ink: #EDE7D8;
+    --ink-dim: #A99F8A;
+    --brass: #C9A15C;
+    --brass-dim: #8A713F;
+    --hit: #5FA777;
+    --miss: #B4593E;
+    --pending: #4A4437;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overscroll-behavior-y: none;
+  }
+
+  .tab-mono {
+    font-family: "SF Mono", "Menlo", "Cascadia Code", ui-monospace, monospace;
+  }
+
+  #app {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: env(safe-area-inset-top) 16px calc(env(safe-area-inset-bottom) + 24px);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  header {
+    padding: 22px 4px 16px;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--line);
+  }
+
+  header .brand {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+  }
+  header .brand span { color: var(--brass); }
+
+  header .tagline {
+    font-size: 11px;
+    color: var(--ink-dim);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  nav.tabs {
+    display: flex;
+    gap: 4px;
+    margin: 16px 0;
+    background: var(--bg-raised);
+    border-radius: 10px;
+    padding: 4px;
+  }
+  nav.tabs button {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--ink-dim);
+    font-size: 13px;
+    font-weight: 600;
+    padding: 9px 6px;
+    border-radius: 7px;
+    cursor: pointer;
+  }
+  nav.tabs button.active {
+    background: var(--brass);
+    color: #15130F;
+  }
+
+  section { display: none; flex: 1; min-height: 0; }
+  section.active { display: flex; flex-direction: column; }
+
+  /* ---- Library ---- */
+  .song-list { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+  .song-card {
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 14px 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+  }
+  .song-card:active { border-color: var(--brass-dim); }
+  .song-card .meta { font-size: 12px; color: var(--ink-dim); margin-top: 3px; }
+  .song-card .go { color: var(--brass); font-size: 20px; }
+
+  .import-box {
+    margin-top: 18px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+  }
+  .import-box h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-dim); margin: 0 0 10px; }
+  .import-box textarea {
+    width: 100%;
+    min-height: 140px;
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    color: var(--ink);
+    padding: 12px;
+    font-size: 13px;
+    resize: vertical;
+  }
+  .field-row { display: flex; gap: 8px; margin-top: 10px; }
+  .field-row input[type=text] {
+    flex: 1;
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    color: var(--ink);
+    padding: 10px 12px;
+    font-size: 14px;
+  }
+  .btn {
+    background: var(--brass);
+    color: #15130F;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 18px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .btn.secondary {
+    background: transparent;
+    border: 1px solid var(--brass-dim);
+    color: var(--brass);
+  }
+  .btn:active { opacity: 0.8; }
+  .error-msg { color: var(--miss); font-size: 12px; margin-top: 8px; min-height: 14px; }
+
+  /* ---- Practice ---- */
+  .practice-head {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 10px;
+  }
+  .practice-head h2 { font-size: 16px; margin: 0; }
+  .practice-head .sub { font-size: 12px; color: var(--ink-dim); }
+
+  .tuner {
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px;
+    text-align: center;
+    margin-bottom: 14px;
+  }
+  .tuner .target {
+    font-size: 12px; color: var(--ink-dim); text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .tuner .target b { color: var(--brass); font-size: 15px; letter-spacing: 0; text-transform: none; }
+  .meter {
+    position: relative;
+    height: 10px;
+    background: var(--line);
+    border-radius: 6px;
+    margin: 12px 0 8px;
+    overflow: hidden;
+  }
+  .meter .needle {
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 4px;
+    background: var(--ink-dim);
+    left: 50%;
+    transform: translateX(-50%);
+    transition: left 60ms linear, background 150ms;
+    border-radius: 2px;
+  }
+  .meter .center-mark {
+    position: absolute; left: 50%; top: -3px; bottom: -3px; width: 2px;
+    background: var(--brass-dim); transform: translateX(-50%);
+  }
+  .heard { font-size: 13px; color: var(--ink-dim); min-height: 18px; }
+  .heard b { color: var(--ink); }
+
+  .tabline-wrap {
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 14px 4px;
+    overflow-x: auto;
+    flex: 1;
+    min-height: 0;
+  }
+  .tabline {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 4px 12px;
+  }
+  .tabrow {
+    display: flex;
+    align-items: center;
+    white-space: pre;
+    font-size: 17px;
+    line-height: 1.9;
+  }
+  .tabrow .stringname {
+    width: 18px;
+    color: var(--ink-dim);
+    flex-shrink: 0;
+  }
+  .fretcell {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    color: var(--ink-dim);
+  }
+  .fretcell.note {
+    color: var(--ink);
+    font-weight: 700;
+    border-radius: 4px;
+  }
+  .fretcell.pending { color: var(--ink); }
+  .fretcell.current {
+    background: var(--brass);
+    color: #15130F !important;
+    box-shadow: 0 0 0 2px var(--brass);
+  }
+  .fretcell.hit { background: var(--hit); color: #0e1a12 !important; }
+  .fretcell.miss { background: var(--miss); color: #1a0e0a !important; }
+
+  .controls {
+    display: flex; gap: 10px; margin-top: 14px; align-items: center;
+  }
+  .controls .btn { flex: 1; }
+  .mic-status { font-size: 11px; color: var(--ink-dim); text-align: center; margin-top: 8px; }
+  .mic-status.live { color: var(--hit); }
+  .mic-status.err { color: var(--miss); }
+
+  .score-pill {
+    font-size: 12px; color: var(--ink-dim); background: var(--bg-raised);
+    border: 1px solid var(--line); border-radius: 20px; padding: 4px 12px;
+  }
+  .score-pill b { color: var(--brass); }
+
+  .empty-state {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; color: var(--ink-dim); gap: 10px; padding: 40px 20px;
+  }
+  .empty-state .glyph { font-size: 34px; color: var(--brass-dim); }
+
+  footer {
+    text-align: center; font-size: 11px; color: var(--ink-dim); padding-top: 18px; opacity: 0.7;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <header>
+    <div>
+      <div class="brand">Fret<span>line</span></div>
+      <div class="tagline">Play it. Hear it check itself.</div>
+    </div>
+    <div class="score-pill" id="globalScore" style="display:none;">Accuracy <b id="globalScoreVal">—</b></div>
+  </header>
+
+  <nav class="tabs">
+    <button class="active" data-view="library">Library</button>
+    <button data-view="practice">Practice</button>
+  </nav>
+
+  <section id="view-library" class="active">
+    <div class="song-list" id="songList"></div>
+
+    <div class="import-box">
+      <h3>Import your own tab</h3>
+      <div class="field-row">
+        <input type="text" id="importTitle" placeholder="Song title (optional)">
+      </div>
+      <textarea id="importText" placeholder="Paste a standard 6-line ASCII tab here, e.g.&#10;e|--0---0---3-|&#10;B|----1---3---|&#10;G|--------0---|&#10;D|------------|&#10;A|------------|&#10;E|------------|"></textarea>
+      <div class="error-msg" id="importError"></div>
+      <div class="field-row">
+        <button class="btn" id="importBtn">Load into Practice</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="view-practice">
+    <div id="practiceEmpty" class="empty-state">
+      <div class="glyph">♪</div>
+      <div>No tab loaded yet.</div>
+      <div>Pick a song from the Library, or paste your own.</div>
+      <button class="btn secondary" onclick="switchView('library')">Go to Library</button>
+    </div>
+
+    <div id="practiceMain" style="display:none; flex:1; min-height:0; display:flex; flex-direction:column;">
+      <div class="practice-head">
+        <div>
+          <h2 id="practiceTitle">—</h2>
+          <div class="sub" id="practiceSub">Tap Start, then play along</div>
+        </div>
+      </div>
+
+      <div class="tuner">
+        <div class="target">Listening for <b id="targetNote">—</b></div>
+        <div class="meter"><div class="center-mark"></div><div class="needle" id="needle"></div></div>
+        <div class="heard" id="heardNote">Mic idle</div>
+      </div>
+
+      <div class="tabline-wrap">
+        <div class="tabline" id="tabRender"></div>
+      </div>
+
+      <div class="controls">
+        <button class="btn" id="startBtn">Start Practice</button>
+        <button class="btn secondary" id="resetBtn">Reset</button>
+      </div>
+      <div class="mic-status" id="micStatus"></div>
+    </div>
+  </section>
+
+  <footer>Free, runs entirely in your browser. Audio never leaves your device.</footer>
+</div>
+
+<script>
+/* ============================================================
+   1. TAB PARSING
+   Standard notation: 6 lines top-to-bottom = e B G D A E
+   Each line: "e|--3--0--|" — digits are frets, '-' is rest,
+   position in the string (character index) = time slot.
+   ============================================================ */
+
+const STRING_ORDER = ['e','B','G','D','A','E']; // high to low, standard display order
+const OPEN_MIDI = { e: 64, B: 59, G: 55, D: 50, A: 45, E: 40 }; // standard tuning MIDI numbers
+
+function parseTab(raw) {
+  const lines = raw.split('\n').map(l => l.replace(/\r/g,'')).filter(l => l.trim().length > 0);
+  // Find 6 lines that look like tab lines: start with a string-name char then '|'
+  const tabLines = [];
+  for (const line of lines) {
+    const m = line.match(/^\s*([eEbBgGdDaA])\|?[-0-9hpb\/\\~x|]+\|?\s*$/);
+    if (m) tabLines.push(line);
+  }
+  if (tabLines.length < 6) {
+    throw new Error("Couldn't find 6 tab lines (one per string). Use standard format like: e|--3--0--|");
+  }
+  // take first 6 consecutive matching lines as one block (supports only first block for v1)
+  const block = tabLines.slice(0, 6);
+
+  // identify string name per line (first non-space char)
+  const parsed = block.map(line => {
+    const nameChar = line.trim()[0].toLowerCase();
+    const body = line.replace(/^\s*[eEbBgGdDaA]/, '').replace(/\|/g, '|');
+    return { nameChar, body };
+  });
+
+  // map to canonical order e B G D A E by matching name chars, allow e/E ambiguity by position
+  // If names collide (e and E both lowercase 'e'), fall back to positional order (top->bottom = e,B,G,D,A,E)
+  const order = ['e','b','g','d','a','e2'];
+  let canon;
+  const nameChars = parsed.map(p => p.nameChar);
+  const hasDupE = nameChars.filter(c => c === 'e').length === 2;
+  if (hasDupE) {
+    canon = parsed; // assume already top-to-bottom = e,B,G,D,A,E
+  } else {
+    canon = parsed;
+  }
+
+  const stringKeys = ['e','B','G','D','A','E'];
+  const maxLen = Math.max(...canon.map(p => p.body.length));
+  const padded = canon.map(p => p.body.padEnd(maxLen, '-'));
+
+  // walk column by column, extract frets (handle multi-digit frets like 10,12)
+  const notesByCol = []; // { col, events: [{stringIdx, fret}] }
+  let col = 0;
+  while (col < maxLen) {
+    const events = [];
+    for (let s = 0; s < 6; s++) {
+      const ch = padded[s][col];
+      if (ch && /[0-9]/.test(ch)) {
+        // check for second digit
+        let numStr = ch;
+        let consumed = 1;
+        const next = padded[s][col+1];
+        if (next && /[0-9]/.test(next)) {
+          numStr += next;
+          consumed = 2;
+        }
+        events.push({ stringIdx: s, fret: parseInt(numStr, 10), width: consumed });
+      }
+    }
+    if (events.length > 0) {
+      const maxWidth = Math.max(...events.map(e => e.width));
+      notesByCol.push({ col, events });
+      col += maxWidth;
+    } else {
+      col += 1;
+    }
+  }
+
+  if (notesByCol.length === 0) {
+    throw new Error("No notes found in the tab — check the format (digits = frets, '-' = rest).");
+  }
+
+  // flatten into a linear note sequence (one entry per string hit, grouped by column = chord)
+  const sequence = notesByCol.map(group => ({
+    col: group.col,
+    notes: group.events.map(e => ({
+      stringKey: stringKeys[e.stringIdx],
+      fret: e.fret,
+      midi: OPEN_MIDI[stringKeys[e.stringIdx]] + e.fret
+    }))
+  }));
+
+  return { stringKeys, sequence, raw };
+}
+
+function midiToName(midi) {
+  const names = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  const octave = Math.floor(midi / 12) - 1;
+  return names[midi % 12] + octave;
+}
+
+function freqToMidi(freq) {
+  return 69 + 12 * Math.log2(freq / 440);
+}
+function midiToFreq(midi) {
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
+/* ============================================================
+   2. BUILT-IN LIBRARY (simple riffs, free/traditional or original)
+   ============================================================ */
+
+const LIBRARY = [
+  {
+    id: 'warmup-frets',
+    title: 'Warm-Up: Open Position Run',
+    meta: 'Beginner · single notes',
+    tab:
+`e|----------------0-1-3-|
+B|------------0-1-------|
+G|--------0-2------------|
+D|----0-2----------------|
+A|--------------------- -|
+E|------------------------|`
+  },
+  {
+    id: 'ode-to-joy',
+    title: 'Ode to Joy (opening phrase)',
+    meta: 'Traditional · Beethoven',
+    tab:
+`e|--0-0-1-3-3-1-0--1-1-1-1-|
+B|-------------------------|
+G|-------------------------|
+D|-------------------------|
+A|-------------------------|
+E|-------------------------|`
+  },
+  {
+    id: 'greensleeves',
+    title: 'Greensleeves (intro)',
+    meta: 'Traditional',
+    tab:
+`e|----------0---3-|
+B|--------1---1---|
+G|------0---------|
+D|--2-------------|
+A|----------------|
+E|----------------|`
+  }
+];
+
+/* ============================================================
+   3. PITCH DETECTION (autocorrelation)
+   ============================================================ */
+
+let audioCtx = null;
+let analyser = null;
+let micStream = null;
+let rafId = null;
+let smoothedMidi = null;
+
+function autoCorrelate(buf, sampleRate) {
+  // Basic autocorrelation pitch detector
+  const SIZE = buf.length;
+  let rms = 0;
+  for (let i = 0; i < SIZE; i++) rms += buf[i] * buf[i];
+  rms = Math.sqrt(rms / SIZE);
+  if (rms < 0.01) return -1; // too quiet
+
+  let r1 = 0, r2 = SIZE - 1;
+  const threshold = 0.2;
+  for (let i = 0; i < SIZE / 2; i++) {
+    if (Math.abs(buf[i]) < threshold) { r1 = i; break; }
+  }
+  for (let i = 1; i < SIZE / 2; i++) {
+    if (Math.abs(buf[SIZE - i]) < threshold) { r2 = SIZE - i; break; }
+  }
+  const trimmed = buf.slice(r1, r2);
+  const n = trimmed.length;
+  const c = new Array(n).fill(0);
+  for (let lag = 0; lag < n; lag++) {
+    for (let i = 0; i < n - lag; i++) {
+      c[lag] += trimmed[i] * trimmed[i + lag];
+    }
+  }
+  let d = 0;
+  while (d < n - 1 && c[d] > c[d + 1]) d++;
+  let maxVal = -1, maxPos = -1;
+  for (let i = d; i < n; i++) {
+    if (c[i] > maxVal) { maxVal = c[i]; maxPos = i; }
+  }
+  let T0 = maxPos;
+  if (T0 <= 0) return -1;
+  // parabolic interpolation
+  const x1 = c[T0 - 1] || c[T0], x2 = c[T0], x3 = c[T0 + 1] || c[T0];
+  const a = (x1 + x3 - 2 * x2) / 2;
+  const b = (x3 - x1) / 2;
+  if (a) T0 = T0 - b / (2 * a);
+  return sampleRate / T0;
+}
+
+async function startMic() {
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+  } catch (e) {
+    setMicStatus('Microphone access denied or unavailable.', 'err');
+    return false;
+  }
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const source = audioCtx.createMediaStreamSource(micStream);
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 2048;
+  source.connect(analyser);
+  setMicStatus('Mic live — listening', 'live');
+  pitchLoop();
+  return true;
+}
+
+function stopMic() {
+  if (rafId) cancelAnimationFrame(rafId);
+  if (micStream) micStream.getTracks().forEach(t => t.stop());
+  if (audioCtx) audioCtx.close();
+  micStream = null; audioCtx = null; analyser = null;
+  setMicStatus('');
+}
+
+function setMicStatus(msg, cls) {
+  const el = document.getElementById('micStatus');
+  el.textContent = msg;
+  el.className = 'mic-status' + (cls ? ' ' + cls : '');
+}
+
+function pitchLoop() {
+  if (!analyser) return;
+  const buf = new Float32Array(analyser.fftSize);
+  analyser.getFloatTimeDomainData(buf);
+  const freq = autoCorrelate(buf, audioCtx.sampleRate);
+
+  if (freq > 60 && freq < 1200) {
+    const midi = freqToMidi(freq);
+    smoothedMidi = smoothedMidi === null ? midi : smoothedMidi * 0.6 + midi * 0.4;
+    onPitchDetected(smoothedMidi);
+  } else {
+    smoothedMidi = null;
+    onPitchDetected(null);
+  }
+  rafId = requestAnimationFrame(pitchLoop);
+}
+
+/* ============================================================
+   4. PRACTICE ENGINE
+   ============================================================ */
+
+let currentTab = null;
+let seqIndex = 0;
+let results = []; // 'hit' | 'miss' | null per sequence index
+let practiceRunning = false;
+let holdFrames = 0;
+const HOLD_NEEDED = 6; // consecutive good frames to count as a hit
+const CENTS_TOLERANCE = 45; // how close in cents counts as correct
+
+function loadTab(tabObj) {
+  try {
+    const parsed = parseTab(tabObj.tab);
+    currentTab = { ...tabObj, parsed };
+    seqIndex = 0;
+    results = new Array(parsed.sequence.length).fill(null);
+    renderTab();
+    document.getElementById('practiceEmpty').style.display = 'none';
+    document.getElementById('practiceMain').style.display = 'flex';
+    document.getElementById('practiceTitle').textContent = tabObj.title || 'Custom tab';
+    document.getElementById('practiceSub').textContent = 'Tap Start, then play along';
+    updateTarget();
+    switchView('practice');
+  } catch (e) {
+    document.getElementById('importError').textContent = e.message;
+  }
+}
+
+function renderTab() {
+  const container = document.getElementById('tabRender');
+  container.innerHTML = '';
+  const stringKeys = currentTab.parsed.stringKeys;
+
+  // Build a per-string array of cells aligned to sequence index
+  const rows = stringKeys.map(key => ({ key, cells: [] }));
+
+  currentTab.parsed.sequence.forEach((group, idx) => {
+    const notesOnRow = {};
+    group.notes.forEach(n => { notesOnRow[n.stringKey] = n.fret; });
+    stringKeys.forEach((key, rIdx) => {
+      if (notesOnRow[key] !== undefined) {
+        rows[rIdx].cells.push({ idx, fret: notesOnRow[key] });
+      } else {
+        rows[rIdx].cells.push({ idx: null, fret: null });
+      }
+    });
+  });
+
+  rows.forEach(row => {
+    const rowEl = document.createElement('div');
+    rowEl.className = 'tabrow tab-mono';
+    const label = document.createElement('span');
+    label.className = 'stringname';
+    label.textContent = row.key;
+    rowEl.appendChild(label);
+    row.cells.forEach(cell => {
+      const cellEl = document.createElement('span');
+      cellEl.className = 'fretcell';
+      if (cell.fret !== null) {
+        cellEl.textContent = cell.fret;
+        cellEl.classList.add('note', 'pending');
+        cellEl.dataset.idx = cell.idx;
+      } else {
+        cellEl.textContent = '-';
+      }
+      rowEl.appendChild(cellEl);
+    });
+    container.appendChild(rowEl);
+  });
+  highlightCurrent();
+}
+
+function highlightCurrent() {
+  const cells = document.querySelectorAll('.fretcell.note');
+  cells.forEach(c => {
+    const idx = parseInt(c.dataset.idx, 10);
+    c.classList.remove('current', 'hit', 'miss', 'pending');
+    if (results[idx] === 'hit') c.classList.add('hit');
+    else if (results[idx] === 'miss') c.classList.add('miss');
+    else if (idx === seqIndex) c.classList.add('current');
+    else c.classList.add('pending');
+  });
+  // scroll current into view
+  const cur = document.querySelector('.fretcell.current');
+  if (cur) cur.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+}
+
+function updateTarget() {
+  const targetEl = document.getElementById('targetNote');
+  if (!currentTab || seqIndex >= currentTab.parsed.sequence.length) {
+    targetEl.textContent = practiceRunning ? 'Done!' : '—';
+    return;
+  }
+  const group = currentTab.parsed.sequence[seqIndex];
+  const names = group.notes.map(n => `${n.stringKey} str, fret ${n.fret} (${midiToName(n.midi)})`);
+  targetEl.textContent = names.join(' + ');
+}
+
+function onPitchDetected(midi) {
+  const heardEl = document.getElementById('heardNote');
+  const needle = document.getElementById('needle');
+
+  if (midi === null) {
+    heardEl.innerHTML = 'Listening…';
+    needle.style.left = '50%';
+    needle.style.background = 'var(--ink-dim)';
+    holdFrames = 0;
+    return;
+  }
+
+  const roundedMidi = Math.round(midi);
+  heardEl.innerHTML = `Hearing <b>${midiToName(roundedMidi)}</b>`;
+
+  if (!practiceRunning || !currentTab || seqIndex >= currentTab.parsed.sequence.length) {
+    needle.style.left = '50%';
+    needle.style.background = 'var(--ink-dim)';
+    return;
+  }
+
+  const group = currentTab.parsed.sequence[seqIndex];
+  // pick the closest expected note in this chord/group to the detected pitch
+  let best = null, bestDiff = Infinity;
+  for (const n of group.notes) {
+    const diffCents = (midi - n.midi) * 100;
+    if (Math.abs(diffCents) < Math.abs(bestDiff)) { bestDiff = diffCents; best = n; }
+  }
+
+  const pct = Math.max(-50, Math.min(50, bestDiff / 2)); // scale cents to +/-50%
+  needle.style.left = `calc(50% + ${pct}%)`;
+
+  if (Math.abs(bestDiff) <= CENTS_TOLERANCE) {
+    needle.style.background = 'var(--hit)';
+    holdFrames++;
+    if (holdFrames >= HOLD_NEEDED) {
+      markResult('hit');
+    }
+  } else {
+    needle.style.background = bestDiff > 0 ? 'var(--brass)' : 'var(--miss)';
+    holdFrames = 0;
+  }
+}
+
+function markResult(status) {
+  results[seqIndex] = status;
+  seqIndex++;
+  holdFrames = 0;
+  highlightCurrent();
+  updateTarget();
+  updateScore();
+  if (seqIndex >= currentTab.parsed.sequence.length) {
+    finishPractice();
+  }
+}
+
+function updateScore() {
+  const done = results.filter(r => r !== null).length;
+  const hits = results.filter(r => r === 'hit').length;
+  if (done === 0) return;
+  const pct = Math.round((hits / done) * 100);
+  const pill = document.getElementById('globalScore');
+  pill.style.display = 'inline-block';
+  document.getElementById('globalScoreVal').textContent = `${pct}% (${hits}/${done})`;
+}
+
+function finishPractice() {
+  practiceRunning = false;
+  document.getElementById('startBtn').textContent = 'Start Practice';
+  document.getElementById('practiceSub').textContent = 'Run complete — check your accuracy above';
+  stopMic();
+}
+
+document.getElementById('startBtn').addEventListener('click', async () => {
+  if (!currentTab) return;
+  if (practiceRunning) {
+    practiceRunning = false;
+    document.getElementById('startBtn').textContent = 'Start Practice';
+    stopMic();
+    return;
+  }
+  const ok = await startMic();
+  if (!ok) return;
+  practiceRunning = true;
+  document.getElementById('startBtn').textContent = 'Stop';
+  document.getElementById('practiceSub').textContent = 'Play the highlighted note';
+  updateTarget();
+});
+
+document.getElementById('resetBtn').addEventListener('click', () => {
+  if (!currentTab) return;
+  seqIndex = 0;
+  results = new Array(currentTab.parsed.sequence.length).fill(null);
+  practiceRunning = false;
+  stopMic();
+  document.getElementById('startBtn').textContent = 'Start Practice';
+  document.getElementById('practiceSub').textContent = 'Tap Start, then play along';
+  document.getElementById('globalScore').style.display = 'none';
+  highlightCurrent();
+  updateTarget();
+});
+
+/* ============================================================
+   5. LIBRARY UI + IMPORT
+   ============================================================ */
+
+function renderLibrary() {
+  const list = document.getElementById('songList');
+  list.innerHTML = '';
+  LIBRARY.forEach(song => {
+    const card = document.createElement('div');
+    card.className = 'song-card';
+    card.innerHTML = `<div><div>${song.title}</div><div class="meta">${song.meta}</div></div><div class="go">▸</div>`;
+    card.addEventListener('click', () => loadTab(song));
+    list.appendChild(card);
+  });
+}
+
+document.getElementById('importBtn').addEventListener('click', () => {
+  const title = document.getElementById('importTitle').value.trim() || 'My tab';
+  const text = document.getElementById('importText').value;
+  document.getElementById('importError').textContent = '';
+  if (!text.trim()) {
+    document.getElementById('importError').textContent = 'Paste a tab first.';
+    return;
+  }
+  loadTab({ id: 'custom', title, meta: 'Imported', tab: text });
+});
+
+/* ============================================================
+   6. VIEW SWITCHING
+   ============================================================ */
+
+function switchView(name) {
+  document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === name));
+  document.getElementById('view-library').classList.toggle('active', name === 'library');
+  document.getElementById('view-practice').classList.toggle('active', name === 'practice');
+}
+document.querySelectorAll('nav.tabs button').forEach(b => {
+  b.addEventListener('click', () => switchView(b.dataset.view));
+});
+
+renderLibrary();
+</script>
+</body>
+</html>
