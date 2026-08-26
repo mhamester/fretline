@@ -509,7 +509,7 @@ function autoCorrelate(buf, sampleRate) {
   let rms = 0;
   for (let i = 0; i < SIZE; i++) rms += buf[i] * buf[i];
   rms = Math.sqrt(rms / SIZE);
-  if (rms < 0.01) return -1; // too quiet / no signal
+  if (rms < 0.006) return -1; // too quiet / no signal
 
   const halfSize = Math.floor(SIZE / 2);
   const yinBuffer = new Float32Array(halfSize);
@@ -532,22 +532,60 @@ function autoCorrelate(buf, sampleRate) {
     yinBuffer[tau] = runningSum === 0 ? 1 : (yinBuffer[tau] * tau) / runningSum;
   }
 
-  // Step 3: absolute threshold — take the first dip below threshold,
-  // not the global minimum, which is what avoids octave errors
+  // Restrict candidate search to guitar's practical range (with margin) so
+  // we never lock onto very-high-frequency noise or sub-audio rumble.
+  const minFreq = 65;   // below low E (82.4 Hz)
+  const maxFreq = 1200;
+  const tauMin = Math.max(2, Math.floor(sampleRate / maxFreq));
+  const tauMax = Math.min(halfSize - 2, Math.ceil(sampleRate / minFreq));
+  if (tauMax <= tauMin) return -1;
+
   const threshold = 0.15;
   let tauEstimate = -1;
-  for (let tau = 2; tau < halfSize; tau++) {
+  for (let tau = tauMin; tau <= tauMax; tau++) {
     if (yinBuffer[tau] < threshold) {
-      while (tau + 1 < halfSize && yinBuffer[tau + 1] < yinBuffer[tau]) tau++;
+      while (tau + 1 <= tauMax && yinBuffer[tau + 1] < yinBuffer[tau]) tau++;
       tauEstimate = tau;
       break;
     }
   }
-  if (tauEstimate === -1) return -1; // no clear pitch found
+  if (tauEstimate === -1) {
+    // Fallback: no dip cleared the strict threshold — take the best
+    // available minimum in range if it's at least plausible.
+    let minVal = Infinity, minIdx = -1;
+    for (let tau = tauMin; tau <= tauMax; tau++) {
+      if (yinBuffer[tau] < minVal) { minVal = yinBuffer[tau]; minIdx = tau; }
+    }
+    if (minIdx === -1 || minVal > 0.45) return -1;
+    tauEstimate = minIdx;
+  }
+
+  // Octave-error correction: a strong 2nd harmonic can create a spurious
+  // dip at half the true period. Keep walking to double the period as long
+  // as an equally good (or nearly as good) dip exists there — this prefers
+  // the true (lower) fundamental over a harmonic false-lock.
+  let candidate = tauEstimate;
+  while (candidate * 2 <= tauMax) {
+    const doubled = candidate * 2;
+    let bestDoubled = doubled, bestVal = yinBuffer[doubled];
+    for (let d = -2; d <= 2; d++) {
+      const idx = doubled + d;
+      if (idx >= tauMin && idx <= tauMax && yinBuffer[idx] < bestVal) {
+        bestVal = yinBuffer[idx];
+        bestDoubled = idx;
+      }
+    }
+    if (bestVal < threshold * 1.8) {
+      candidate = bestDoubled;
+    } else {
+      break;
+    }
+  }
+  tauEstimate = candidate;
 
   // Step 4: parabolic interpolation around the dip for sub-sample accuracy
-  const x0 = tauEstimate < 1 ? tauEstimate : tauEstimate - 1;
-  const x2 = tauEstimate + 1 < halfSize ? tauEstimate + 1 : tauEstimate;
+  const x0 = tauEstimate <= tauMin ? tauEstimate : tauEstimate - 1;
+  const x2 = tauEstimate + 1 <= tauMax ? tauEstimate + 1 : tauEstimate;
   let betterTau;
   if (x0 === tauEstimate) {
     betterTau = yinBuffer[tauEstimate] <= yinBuffer[x2] ? tauEstimate : x2;
@@ -569,7 +607,7 @@ async function startMic() {
       audio: {
         echoCancellation: { ideal: false },
         noiseSuppression: { ideal: false },
-        autoGainControl: { ideal: false }
+        autoGainControl: { ideal: true }
       }
     });
   } catch (e) {
