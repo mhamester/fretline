@@ -499,11 +499,11 @@ let micStream = null;
 let rafId = null;
 let smoothedMidi = null;
 
-function autoCorrelate(buf, sampleRate) {
-  // YIN pitch detection algorithm — much more resistant to octave/harmonic
-  // errors than plain autocorrelation, which matters a lot for guitar's
-  // overtone-heavy signal (it was locking onto a harmonic instead of the
-  // true fundamental).
+function autoCorrelate(buf, sampleRate, expectedFreqs) {
+  // YIN pitch detection algorithm. When we already know which note(s) are
+  // expected (i.e. we're mid-practice), we search for periodicity near
+  // those frequencies FIRST — this sidesteps octave ambiguity entirely,
+  // rather than trying to detect blind and correct after the fact.
   const SIZE = buf.length;
 
   let rms = 0;
@@ -540,6 +540,39 @@ function autoCorrelate(buf, sampleRate) {
   const tauMax = Math.min(halfSize - 2, Math.ceil(sampleRate / minFreq));
   if (tauMax <= tauMin) return -1;
 
+  function parabolicRefine(tau) {
+    const x0 = tau <= tauMin ? tau : tau - 1;
+    const x2 = tau + 1 <= tauMax ? tau + 1 : tau;
+    if (x0 === tau) return yinBuffer[tau] <= yinBuffer[x2] ? tau : x2;
+    if (x2 === tau) return yinBuffer[tau] <= yinBuffer[x0] ? tau : x0;
+    const s0 = yinBuffer[x0], s1 = yinBuffer[tau], s2 = yinBuffer[x2];
+    const denom = 2 * (2 * s1 - s2 - s0);
+    return denom === 0 ? tau : tau + (s2 - s0) / denom;
+  }
+
+  // --- Targeted search: look near each expected note's frequency ---
+  if (expectedFreqs && expectedFreqs.length > 0) {
+    const CENTS_WINDOW = 150; // a bit more than a semitone either side
+    let bestTau = -1, bestVal = Infinity;
+    for (const f of expectedFreqs) {
+      const freqHigh = f * Math.pow(2, CENTS_WINDOW / 1200);
+      const freqLow = f * Math.pow(2, -CENTS_WINDOW / 1200);
+      const lo = Math.max(tauMin, Math.floor(sampleRate / freqHigh));
+      const hi = Math.min(tauMax, Math.ceil(sampleRate / freqLow));
+      for (let tau = lo; tau <= hi; tau++) {
+        if (yinBuffer[tau] < bestVal) { bestVal = yinBuffer[tau]; bestTau = tau; }
+      }
+    }
+    if (bestTau !== -1 && bestVal < 0.3) {
+      const refined = parabolicRefine(bestTau);
+      return refined > 0 ? sampleRate / refined : -1;
+    }
+    // No clean match near any expected note — fall through to blind
+    // detection below, so we still report what was actually heard
+    // (e.g. the person played a genuinely different note).
+  }
+
+  // --- Blind search (no target, or target search came up empty) ---
   const threshold = 0.15;
   let tauEstimate = -1;
   for (let tau = tauMin; tau <= tauMax; tau++) {
@@ -550,8 +583,6 @@ function autoCorrelate(buf, sampleRate) {
     }
   }
   if (tauEstimate === -1) {
-    // Fallback: no dip cleared the strict threshold — take the best
-    // available minimum in range if it's at least plausible.
     let minVal = Infinity, minIdx = -1;
     for (let tau = tauMin; tau <= tauMax; tau++) {
       if (yinBuffer[tau] < minVal) { minVal = yinBuffer[tau]; minIdx = tau; }
@@ -560,12 +591,8 @@ function autoCorrelate(buf, sampleRate) {
     tauEstimate = minIdx;
   }
 
-  // Octave-error correction: a strong 2nd harmonic can create a spurious
-  // dip at a shorter period than the true fundamental. Check exactly one
-  // octave down (double the period) and only switch to it if that match
-  // is genuinely comparable — not just "under some loose bound," which
-  // was causing runaway multi-octave errors on bright, harmonic-rich
-  // strings (like an open high e reporting two octaves too low).
+  // Single one-octave-down check: a strong 2nd harmonic can create a
+  // spurious dip at a shorter period than the true fundamental.
   function localMin(tau) {
     let best = tau, bestVal = yinBuffer[tau];
     for (let d = -2; d <= 2; d++) {
@@ -577,32 +604,16 @@ function autoCorrelate(buf, sampleRate) {
     }
     return { idx: best, val: bestVal };
   }
-
   const candidateVal = yinBuffer[tauEstimate];
   const doubledTau = tauEstimate * 2;
   if (doubledTau <= tauMax) {
     const dbl = localMin(doubledTau);
-    // Only drop an octave if the longer period matches nearly as tightly
-    // as the original AND is itself a strong, unambiguous match.
     if (dbl.val <= candidateVal * 1.15 && dbl.val < 0.2) {
       tauEstimate = dbl.idx;
     }
   }
 
-  // Step 4: parabolic interpolation around the dip for sub-sample accuracy
-  const x0 = tauEstimate <= tauMin ? tauEstimate : tauEstimate - 1;
-  const x2 = tauEstimate + 1 <= tauMax ? tauEstimate + 1 : tauEstimate;
-  let betterTau;
-  if (x0 === tauEstimate) {
-    betterTau = yinBuffer[tauEstimate] <= yinBuffer[x2] ? tauEstimate : x2;
-  } else if (x2 === tauEstimate) {
-    betterTau = yinBuffer[tauEstimate] <= yinBuffer[x0] ? tauEstimate : x0;
-  } else {
-    const s0 = yinBuffer[x0], s1 = yinBuffer[tauEstimate], s2 = yinBuffer[x2];
-    const denom = 2 * (2 * s1 - s2 - s0);
-    betterTau = denom === 0 ? tauEstimate : tauEstimate + (s2 - s0) / denom;
-  }
-
+  const betterTau = parabolicRefine(tauEstimate);
   if (betterTau <= 0) return -1;
   return sampleRate / betterTau;
 }
@@ -644,11 +655,19 @@ function setMicStatus(msg, cls) {
   el.className = 'mic-status' + (cls ? ' ' + cls : '');
 }
 
+function getExpectedFrequencies() {
+  if (!practiceRunning || !currentTab) return null;
+  if (seqIndex >= currentTab.parsed.sequence.length) return null;
+  const group = currentTab.parsed.sequence[seqIndex];
+  return group.notes.map(n => midiToFreq(n.midi));
+}
+
 function pitchLoop() {
   if (!analyser) return;
   const buf = new Float32Array(analyser.fftSize);
   analyser.getFloatTimeDomainData(buf);
-  const freq = autoCorrelate(buf, audioCtx.sampleRate);
+  const expected = getExpectedFrequencies();
+  const freq = autoCorrelate(buf, audioCtx.sampleRate, expected);
 
   if (freq > 60 && freq < 1200) {
     const midi = freqToMidi(freq);
