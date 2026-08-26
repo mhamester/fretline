@@ -561,27 +561,33 @@ function autoCorrelate(buf, sampleRate) {
   }
 
   // Octave-error correction: a strong 2nd harmonic can create a spurious
-  // dip at half the true period. Keep walking to double the period as long
-  // as an equally good (or nearly as good) dip exists there — this prefers
-  // the true (lower) fundamental over a harmonic false-lock.
-  let candidate = tauEstimate;
-  while (candidate * 2 <= tauMax) {
-    const doubled = candidate * 2;
-    let bestDoubled = doubled, bestVal = yinBuffer[doubled];
+  // dip at a shorter period than the true fundamental. Check exactly one
+  // octave down (double the period) and only switch to it if that match
+  // is genuinely comparable — not just "under some loose bound," which
+  // was causing runaway multi-octave errors on bright, harmonic-rich
+  // strings (like an open high e reporting two octaves too low).
+  function localMin(tau) {
+    let best = tau, bestVal = yinBuffer[tau];
     for (let d = -2; d <= 2; d++) {
-      const idx = doubled + d;
+      const idx = tau + d;
       if (idx >= tauMin && idx <= tauMax && yinBuffer[idx] < bestVal) {
         bestVal = yinBuffer[idx];
-        bestDoubled = idx;
+        best = idx;
       }
     }
-    if (bestVal < threshold * 1.8) {
-      candidate = bestDoubled;
-    } else {
-      break;
+    return { idx: best, val: bestVal };
+  }
+
+  const candidateVal = yinBuffer[tauEstimate];
+  const doubledTau = tauEstimate * 2;
+  if (doubledTau <= tauMax) {
+    const dbl = localMin(doubledTau);
+    // Only drop an octave if the longer period matches nearly as tightly
+    // as the original AND is itself a strong, unambiguous match.
+    if (dbl.val <= candidateVal * 1.15 && dbl.val < 0.2) {
+      tauEstimate = dbl.idx;
     }
   }
-  tauEstimate = candidate;
 
   // Step 4: parabolic interpolation around the dip for sub-sample accuracy
   const x0 = tauEstimate <= tauMin ? tauEstimate : tauEstimate - 1;
