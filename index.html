@@ -500,56 +500,86 @@ let rafId = null;
 let smoothedMidi = null;
 
 function autoCorrelate(buf, sampleRate) {
-  // Basic autocorrelation pitch detector
+  // YIN pitch detection algorithm — much more resistant to octave/harmonic
+  // errors than plain autocorrelation, which matters a lot for guitar's
+  // overtone-heavy signal (it was locking onto a harmonic instead of the
+  // true fundamental).
   const SIZE = buf.length;
+
   let rms = 0;
   for (let i = 0; i < SIZE; i++) rms += buf[i] * buf[i];
   rms = Math.sqrt(rms / SIZE);
-  if (rms < 0.01) return -1; // too quiet
+  if (rms < 0.01) return -1; // too quiet / no signal
 
-  let r1 = 0, r2 = SIZE - 1;
-  const threshold = 0.2;
-  for (let i = 0; i < SIZE / 2; i++) {
-    if (Math.abs(buf[i]) < threshold) { r1 = i; break; }
+  const halfSize = Math.floor(SIZE / 2);
+  const yinBuffer = new Float32Array(halfSize);
+
+  // Step 1: difference function
+  for (let tau = 0; tau < halfSize; tau++) {
+    let sum = 0;
+    for (let i = 0; i < halfSize; i++) {
+      const delta = buf[i] - buf[i + tau];
+      sum += delta * delta;
+    }
+    yinBuffer[tau] = sum;
   }
-  for (let i = 1; i < SIZE / 2; i++) {
-    if (Math.abs(buf[SIZE - i]) < threshold) { r2 = SIZE - i; break; }
+
+  // Step 2: cumulative mean normalized difference
+  yinBuffer[0] = 1;
+  let runningSum = 0;
+  for (let tau = 1; tau < halfSize; tau++) {
+    runningSum += yinBuffer[tau];
+    yinBuffer[tau] = runningSum === 0 ? 1 : (yinBuffer[tau] * tau) / runningSum;
   }
-  const trimmed = buf.slice(r1, r2);
-  const n = trimmed.length;
-  const c = new Array(n).fill(0);
-  for (let lag = 0; lag < n; lag++) {
-    for (let i = 0; i < n - lag; i++) {
-      c[lag] += trimmed[i] * trimmed[i + lag];
+
+  // Step 3: absolute threshold — take the first dip below threshold,
+  // not the global minimum, which is what avoids octave errors
+  const threshold = 0.15;
+  let tauEstimate = -1;
+  for (let tau = 2; tau < halfSize; tau++) {
+    if (yinBuffer[tau] < threshold) {
+      while (tau + 1 < halfSize && yinBuffer[tau + 1] < yinBuffer[tau]) tau++;
+      tauEstimate = tau;
+      break;
     }
   }
-  let d = 0;
-  while (d < n - 1 && c[d] > c[d + 1]) d++;
-  let maxVal = -1, maxPos = -1;
-  for (let i = d; i < n; i++) {
-    if (c[i] > maxVal) { maxVal = c[i]; maxPos = i; }
+  if (tauEstimate === -1) return -1; // no clear pitch found
+
+  // Step 4: parabolic interpolation around the dip for sub-sample accuracy
+  const x0 = tauEstimate < 1 ? tauEstimate : tauEstimate - 1;
+  const x2 = tauEstimate + 1 < halfSize ? tauEstimate + 1 : tauEstimate;
+  let betterTau;
+  if (x0 === tauEstimate) {
+    betterTau = yinBuffer[tauEstimate] <= yinBuffer[x2] ? tauEstimate : x2;
+  } else if (x2 === tauEstimate) {
+    betterTau = yinBuffer[tauEstimate] <= yinBuffer[x0] ? tauEstimate : x0;
+  } else {
+    const s0 = yinBuffer[x0], s1 = yinBuffer[tauEstimate], s2 = yinBuffer[x2];
+    const denom = 2 * (2 * s1 - s2 - s0);
+    betterTau = denom === 0 ? tauEstimate : tauEstimate + (s2 - s0) / denom;
   }
-  let T0 = maxPos;
-  if (T0 <= 0) return -1;
-  // parabolic interpolation
-  const x1 = c[T0 - 1] || c[T0], x2 = c[T0], x3 = c[T0 + 1] || c[T0];
-  const a = (x1 + x3 - 2 * x2) / 2;
-  const b = (x3 - x1) / 2;
-  if (a) T0 = T0 - b / (2 * a);
-  return sampleRate / T0;
+
+  if (betterTau <= 0) return -1;
+  return sampleRate / betterTau;
 }
 
 async function startMic() {
   try {
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: { ideal: false },
+        noiseSuppression: { ideal: false },
+        autoGainControl: { ideal: false }
+      }
+    });
   } catch (e) {
     setMicStatus('Microphone access denied or unavailable.', 'err');
     return false;
   }
-  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'playback' });
   const source = audioCtx.createMediaStreamSource(micStream);
   analyser = audioCtx.createAnalyser();
-  analyser.fftSize = 2048;
+  analyser.fftSize = 4096;
   source.connect(analyser);
   setMicStatus('Mic live — listening', 'live');
   pitchLoop();
