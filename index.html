@@ -500,10 +500,12 @@ let rafId = null;
 let smoothedMidi = null;
 
 function autoCorrelate(buf, sampleRate, expectedFreqs) {
-  // YIN pitch detection algorithm. When we already know which note(s) are
-  // expected (i.e. we're mid-practice), we search for periodicity near
-  // those frequencies FIRST — this sidesteps octave ambiguity entirely,
-  // rather than trying to detect blind and correct after the fact.
+  // YIN pitch detection. Uses a true global-minimum search (more reliable
+  // than a "first dip below a fixed threshold" heuristic) and judges
+  // candidates RELATIVE to each other rather than against fixed absolute
+  // cutoffs — fixed cutoffs were both rejecting valid-but-noisier signals
+  // (causing dead zones at some frets) and occasionally accepting a
+  // stronger harmonic over a genuine but quieter fundamental.
   const SIZE = buf.length;
 
   let rms = 0;
@@ -550,49 +552,18 @@ function autoCorrelate(buf, sampleRate, expectedFreqs) {
     return denom === 0 ? tau : tau + (s2 - s0) / denom;
   }
 
-  // --- Targeted search: look near each expected note's frequency ---
-  if (expectedFreqs && expectedFreqs.length > 0) {
-    const CENTS_WINDOW = 150; // a bit more than a semitone either side
-    let bestTau = -1, bestVal = Infinity;
-    for (const f of expectedFreqs) {
-      const freqHigh = f * Math.pow(2, CENTS_WINDOW / 1200);
-      const freqLow = f * Math.pow(2, -CENTS_WINDOW / 1200);
-      const lo = Math.max(tauMin, Math.floor(sampleRate / freqHigh));
-      const hi = Math.min(tauMax, Math.ceil(sampleRate / freqLow));
-      for (let tau = lo; tau <= hi; tau++) {
-        if (yinBuffer[tau] < bestVal) { bestVal = yinBuffer[tau]; bestTau = tau; }
-      }
-    }
-    if (bestTau !== -1 && bestVal < 0.3) {
-      const refined = parabolicRefine(bestTau);
-      return refined > 0 ? sampleRate / refined : -1;
-    }
-    // No clean match near any expected note — fall through to blind
-    // detection below, so we still report what was actually heard
-    // (e.g. the person played a genuinely different note).
-  }
-
-  // --- Blind search (no target, or target search came up empty) ---
-  const threshold = 0.15;
-  let tauEstimate = -1;
+  // True global minimum across the whole valid range — the ground truth
+  // we compare every other candidate against.
+  let globalIdx = -1, globalVal = Infinity;
   for (let tau = tauMin; tau <= tauMax; tau++) {
-    if (yinBuffer[tau] < threshold) {
-      while (tau + 1 <= tauMax && yinBuffer[tau + 1] < yinBuffer[tau]) tau++;
-      tauEstimate = tau;
-      break;
-    }
+    if (yinBuffer[tau] < globalVal) { globalVal = yinBuffer[tau]; globalIdx = tau; }
   }
-  if (tauEstimate === -1) {
-    let minVal = Infinity, minIdx = -1;
-    for (let tau = tauMin; tau <= tauMax; tau++) {
-      if (yinBuffer[tau] < minVal) { minVal = yinBuffer[tau]; minIdx = tau; }
-    }
-    if (minIdx === -1 || minVal > 0.45) return -1;
-    tauEstimate = minIdx;
-  }
+  if (globalIdx === -1 || globalVal > 0.5) return -1; // nothing periodic enough anywhere
 
-  // Single one-octave-down check: a strong 2nd harmonic can create a
-  // spurious dip at a shorter period than the true fundamental.
+  // One-octave-down correction on the global candidate: a strong 2nd
+  // harmonic can create a spurious dip at a shorter period than the true
+  // fundamental. Only switch down if the longer period is genuinely
+  // comparable, not just "under some loose bound."
   function localMin(tau) {
     let best = tau, bestVal = yinBuffer[tau];
     for (let d = -2; d <= 2; d++) {
@@ -604,16 +575,41 @@ function autoCorrelate(buf, sampleRate, expectedFreqs) {
     }
     return { idx: best, val: bestVal };
   }
-  const candidateVal = yinBuffer[tauEstimate];
-  const doubledTau = tauEstimate * 2;
+  let correctedIdx = globalIdx;
+  const doubledTau = globalIdx * 2;
   if (doubledTau <= tauMax) {
     const dbl = localMin(doubledTau);
-    if (dbl.val <= candidateVal * 1.15 && dbl.val < 0.2) {
-      tauEstimate = dbl.idx;
+    if (dbl.val <= globalVal * 1.15 && dbl.val < 0.2) {
+      correctedIdx = dbl.idx;
     }
   }
 
-  const betterTau = parabolicRefine(tauEstimate);
+  // If we know which note(s) are expected (mid-practice), prefer a match
+  // near them as long as it's not drastically worse than the true best
+  // match anywhere — judged relative to globalVal, not a fixed cutoff.
+  // This sidesteps octave ambiguity without ever forcing a fake reading
+  // when the person genuinely played something else.
+  if (expectedFreqs && expectedFreqs.length > 0) {
+    const CENTS_WINDOW = 150; // a bit more than a semitone either side
+    let windowIdx = -1, windowVal = Infinity;
+    for (const f of expectedFreqs) {
+      const freqHigh = f * Math.pow(2, CENTS_WINDOW / 1200);
+      const freqLow = f * Math.pow(2, -CENTS_WINDOW / 1200);
+      const lo = Math.max(tauMin, Math.floor(sampleRate / freqHigh));
+      const hi = Math.min(tauMax, Math.ceil(sampleRate / freqLow));
+      for (let tau = lo; tau <= hi; tau++) {
+        if (yinBuffer[tau] < windowVal) { windowVal = yinBuffer[tau]; windowIdx = tau; }
+      }
+    }
+    if (windowIdx !== -1 && windowVal <= globalVal * 1.6 && windowVal < 0.55) {
+      const refined = parabolicRefine(windowIdx);
+      return refined > 0 ? sampleRate / refined : -1;
+    }
+    // Genuinely nothing near the expected note — fall through so we still
+    // report the actual pitch heard (a real miss, not a masked one).
+  }
+
+  const betterTau = parabolicRefine(correctedIdx);
   if (betterTau <= 0) return -1;
   return sampleRate / betterTau;
 }
