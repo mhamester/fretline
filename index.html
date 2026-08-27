@@ -205,8 +205,8 @@
     padding: 8px 4px;
     overflow-x: auto;
     overflow-y: auto;
-    max-height: 80px;
-    flex-shrink: 0;
+    flex: 1;
+    min-height: 56px;
   }
   .tabline {
     display: inline-flex;
@@ -297,8 +297,8 @@
     border: 1px solid var(--line);
     border-radius: 14px;
     margin-bottom: 10px;
-    flex: 1;
-    min-height: 140px;
+    flex-shrink: 0;
+    height: 208px; /* 6 lanes × 34px + a little breathing room */
     overflow: hidden;
   }
   .wf-scrollarea {
