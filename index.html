@@ -738,9 +738,11 @@ let lastRMS = 0;
 let emaRMS = 0.001;      // slow-moving background level, used to spot sudden attack transients
 let lastOnsetAt = -9999; // performance.now() timestamp of the last detected pluck
 let noteOnsetSeen = false; // has a fresh pluck happened since the current target note became active?
+let onsetArmed = true;   // hysteresis: must quiet down again before another onset can be detected
 const ONSET_RATIO = 1.7;      // how much louder than the recent background counts as a new attack
 const ONSET_MIN_RMS = 0.012;  // floor so quiet noise fluctuations never count as a pluck
 const ONSET_REFRACTORY_MS = 110; // minimum gap between two onsets, avoids double-triggering one pluck's decay
+const ONSET_REARM_RMS = 0.008; // signal must dip back below this before a NEW onset can be armed again
 
 function autoCorrelate(buf, sampleRate, expectedFreqs) {
   // YIN pitch detection. Uses a true global-minimum search (more reliable
@@ -996,12 +998,23 @@ function pitchLoop() {
   // Onset detection: a fresh pluck shows up as a sudden jump above the
   // recent background level. This is what lets the app tell "you just
   // played this note again" apart from "this note is still ringing from
-  // before" — essential for repeated identical notes in a row.
+  // before" — essential for repeated identical notes in a row, and for
+  // not registering a chord before it's actually been played.
+  //
+  // Hysteresis matters here: right after a note is hit, the background
+  // average (emaRMS) hasn't caught up to that note's loudness yet, so the
+  // natural wobble in its decay can look like "way louder than average"
+  // and falsely re-trigger. Requiring the signal to genuinely quiet back
+  // down before re-arming fixes that, without blocking real fast repeats
+  // (which do dip toward silence between distinct plucks).
   if (practiceRunning) {
     const now = performance.now();
-    if (lastRMS > emaRMS * ONSET_RATIO && lastRMS > ONSET_MIN_RMS && (now - lastOnsetAt) > ONSET_REFRACTORY_MS) {
+    if (!onsetArmed) {
+      if (lastRMS < ONSET_REARM_RMS) onsetArmed = true;
+    } else if (lastRMS > emaRMS * ONSET_RATIO && lastRMS > ONSET_MIN_RMS && (now - lastOnsetAt) > ONSET_REFRACTORY_MS) {
       noteOnsetSeen = true;
       lastOnsetAt = now;
+      onsetArmed = false;
     }
     emaRMS = emaRMS * 0.93 + lastRMS * 0.07;
   }
@@ -1112,6 +1125,7 @@ function startTempoEngine() {
   noteOnsetSeen = false;
   emaRMS = 0.001;
   lastOnsetAt = -9999;
+  onsetArmed = true;
 
   const startDelay = 0.15;
   practiceStartTime = audioCtx.currentTime + startDelay;
