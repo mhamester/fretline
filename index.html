@@ -430,6 +430,14 @@
         <button class="metro-toggle" id="waitToggle" title="Wait for the correct note instead of moving on">⏸</button>
       </div>
 
+      <div class="tempo-row">
+        <div class="tempo-field" style="flex:1;">
+          <label style="flex-shrink:0;">Mic Gain</label>
+          <input type="range" id="micGainSlider" min="1" max="12" step="0.5" value="6" style="flex:1; accent-color: var(--brass);">
+          <span id="micGainValue" style="font-size:12px; color: var(--ink-dim); width:28px; text-align:right;">6×</span>
+        </div>
+      </div>
+
       <div class="tuner">
         <div class="target">Listening for <b id="targetNote">—</b></div>
         <div class="meter"><div class="center-mark"></div><div class="needle" id="needle"></div></div>
@@ -631,6 +639,8 @@ E|0-3----------------------------|`
 let audioCtx = null;
 let analyser = null;
 let micStream = null;
+let inputGainNode = null;
+let micGainValue = 6; // digital boost applied before pitch detection — helps quiet/distant playing register
 let rafId = null;
 let smoothedMidi = null;
 
@@ -764,9 +774,12 @@ async function startMic() {
   }
   audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'playback' });
   const source = audioCtx.createMediaStreamSource(micStream);
+  inputGainNode = audioCtx.createGain();
+  inputGainNode.gain.value = micGainValue;
   analyser = audioCtx.createAnalyser();
   analyser.fftSize = 4096;
-  source.connect(analyser);
+  source.connect(inputGainNode);
+  inputGainNode.connect(analyser);
   setMicStatus('Mic live — listening', 'live');
   pitchLoop();
   return true;
@@ -776,7 +789,7 @@ function stopMic() {
   if (rafId) cancelAnimationFrame(rafId);
   if (micStream) micStream.getTracks().forEach(t => t.stop());
   if (audioCtx) audioCtx.close();
-  micStream = null; audioCtx = null; analyser = null;
+  micStream = null; audioCtx = null; analyser = null; inputGainNode = null;
   setMicStatus('');
 }
 
@@ -791,6 +804,16 @@ function getExpectedFrequencies() {
   if (seqIndex >= currentTab.parsed.sequence.length) return null;
   const group = currentTab.parsed.sequence[seqIndex];
   return group.notes.map(n => midiToFreq(n.midi));
+}
+
+function getElapsed() {
+  if (!audioCtx) return 0;
+  if (isPaused) {
+    // Frozen at the exact moment the pause began — this is what makes the
+    // waterfall/metronome actually stop, not just the note pointer.
+    return pauseStartTime - practiceStartTime - totalPausedDuration;
+  }
+  return audioCtx.currentTime - practiceStartTime - totalPausedDuration;
 }
 
 function pitchLoop() {
@@ -810,7 +833,7 @@ function pitchLoop() {
   }
 
   if (practiceRunning && currentTab) {
-    const elapsed = audioCtx.currentTime - practiceStartTime - totalPausedDuration;
+    const elapsed = getElapsed();
     updateWaterfallScroll(elapsed);
     updateCountInOverlay(elapsed);
     updateActiveChip(elapsed);
@@ -1210,7 +1233,7 @@ function onPitchDetected(midi) {
     needle.style.background = 'var(--hit)';
     holdFrames++;
     const t = scheduleTimes[seqIndex];
-    const elapsed = audioCtx ? audioCtx.currentTime - practiceStartTime - totalPausedDuration : 0;
+    const elapsed = getElapsed();
     const withinWindow = t === undefined ? false
       : waitMode ? elapsed >= t - hitWindow
       : (elapsed >= t - hitWindow && elapsed <= t + hitWindow);
@@ -1329,6 +1352,11 @@ document.getElementById('waitToggle').addEventListener('click', (e) => {
     : 'Wait for the correct note instead of moving on';
 });
 document.getElementById('previewBtn').addEventListener('click', playPreview);
+document.getElementById('micGainSlider').addEventListener('input', (e) => {
+  micGainValue = parseFloat(e.target.value);
+  document.getElementById('micGainValue').textContent = micGainValue + '×';
+  if (inputGainNode) inputGainNode.gain.value = micGainValue;
+});
 
 /* ============================================================
    5. LIBRARY UI + IMPORT
