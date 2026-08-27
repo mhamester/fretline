@@ -88,6 +88,13 @@
     background: var(--brass);
     color: #15130F;
   }
+  nav.tabs.view-toggle {
+    margin: 0 0 8px;
+  }
+  nav.tabs.view-toggle button {
+    font-size: 12px;
+    padding: 7px 6px;
+  }
 
   section { display: none; flex: 1; min-height: 0; overflow-y: auto; }
   section.active { display: flex; flex-direction: column; }
@@ -444,7 +451,12 @@
         <div class="heard" id="heardNote">Mic idle</div>
       </div>
 
-      <div class="waterfall-wrap">
+      <nav class="tabs view-toggle" data-toggle="display-mode">
+        <button class="active" id="viewWaterfallBtn" data-mode="waterfall">🌊 Waterfall</button>
+        <button data-mode="classic" id="viewClassicBtn">📜 Classic Tab</button>
+      </nav>
+
+      <div class="waterfall-wrap" id="waterfallWrap">
         <div class="wf-scrollarea" id="wfScrollarea">
           <div class="wf-hitline"></div>
           <div class="wf-labels" id="wfLabels"></div>
@@ -453,7 +465,7 @@
         <div class="countin-overlay" id="countInOverlay">4</div>
       </div>
 
-      <div class="tabline-wrap">
+      <div class="tabline-wrap" id="tablineWrap" style="display:none;">
         <div class="tabline" id="tabRender"></div>
       </div>
 
@@ -1389,16 +1401,28 @@ document.getElementById('importBtn').addEventListener('click', () => {
    6. VIEW SWITCHING
    ============================================================ */
 
+let displayMode = 'waterfall'; // 'waterfall' | 'classic'
+
+function applyDisplayMode() {
+  document.getElementById('waterfallWrap').style.display = displayMode === 'waterfall' ? '' : 'none';
+  document.getElementById('tablineWrap').style.display = displayMode === 'classic' ? '' : 'none';
+  document.getElementById('viewWaterfallBtn').classList.toggle('active', displayMode === 'waterfall');
+  document.getElementById('viewClassicBtn').classList.toggle('active', displayMode === 'classic');
+}
+document.getElementById('viewWaterfallBtn').addEventListener('click', () => { displayMode = 'waterfall'; applyDisplayMode(); });
+document.getElementById('viewClassicBtn').addEventListener('click', () => { displayMode = 'classic'; applyDisplayMode(); });
+
 function switchView(name) {
-  document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('active', b.dataset.view === name));
+  document.querySelectorAll('nav.tabs:not([data-toggle]) button').forEach(b => b.classList.toggle('active', b.dataset.view === name));
   document.getElementById('view-library').classList.toggle('active', name === 'library');
   document.getElementById('view-practice').classList.toggle('active', name === 'practice');
 }
-document.querySelectorAll('nav.tabs button').forEach(b => {
+document.querySelectorAll('nav.tabs:not([data-toggle]) button').forEach(b => {
   b.addEventListener('click', () => switchView(b.dataset.view));
 });
 
 renderLibrary();
+applyDisplayMode();
 </script>
 </body>
 </html>
