@@ -283,7 +283,7 @@
 
   /* ---- Tempo / metronome controls ---- */
   .tempo-row {
-    display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+    display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap;
   }
   .tempo-field {
     display: flex; align-items: center; gap: 4px;
@@ -308,7 +308,7 @@
   .stepper-btn:active { opacity: 0.7; }
   .grid-select {
     background: var(--bg-raised); border: 1px solid var(--line); color: var(--ink-dim);
-    border-radius: 10px; padding: 8px 8px; font-size: 11px; flex: 1;
+    border-radius: 10px; padding: 8px 6px; font-size: 11px; flex: 0 0 56px; width: 56px;
   }
   .metro-toggle {
     background: var(--bg-raised); border: 1px solid var(--line); color: var(--ink-dim);
@@ -462,11 +462,12 @@
           <button class="stepper-btn" id="bpmUp">+</button>
         </div>
         <select class="grid-select" id="gridSelect">
-          <option value="4" selected>1 char = 16th note</option>
-          <option value="2">1 char = 8th note</option>
+          <option value="4" selected>16th</option>
+          <option value="2">8th</option>
         </select>
         <button class="metro-toggle on" id="metroToggle" title="Toggle metronome sound">🔊</button>
-        <button class="metro-toggle" id="waitToggle" title="Wait for the correct note instead of moving on">⏸</button>
+        <button class="metro-toggle on" id="waitToggle" title="Waiting for the correct note (tap to switch back to strict tempo)">⏸</button>
+        <button class="metro-toggle on" id="onsetToggle" title="Require a fresh pluck for each note (turn off if repeated notes aren't registering)">🎯</button>
       </div>
 
       <div class="tempo-row">
@@ -983,7 +984,8 @@ let countInSeconds = COUNT_IN_BEATS * secPerBeat;
 let scheduleTimes = [];      // seconds offset per sequence index
 let hitWindow = 0.25;
 let practiceStartTime = 0;
-let waitMode = false;        // when true, pause on a missed window instead of moving on
+let waitMode = true;         // when true, pause on a missed window instead of moving on — on by default, best for beginners
+let onsetDetectionEnabled = true; // require a fresh pluck per note, not just sustained correct pitch
 let isPaused = false;
 let pauseStartTime = 0;
 let totalPausedDuration = 0;
@@ -1438,7 +1440,7 @@ function onPitchDetected(midi) {
     const withinWindow = t === undefined ? false
       : waitMode ? elapsed >= t - hitWindow
       : (elapsed >= t - hitWindow && elapsed <= t + hitWindow);
-    if (holdFrames >= HOLD_NEEDED && withinWindow && noteOnsetSeen) {
+    if (holdFrames >= HOLD_NEEDED && withinWindow && (!onsetDetectionEnabled || noteOnsetSeen)) {
       markResult('hit');
     }
   } else {
@@ -1480,7 +1482,19 @@ function updateScore() {
 function finishPractice() {
   practiceRunning = false;
   document.getElementById('startBtn').textContent = 'Start Practice';
-  document.getElementById('practiceSub').textContent = 'Run complete — check your accuracy above';
+
+  const done = results.filter(r => r !== null).length;
+  const hits = results.filter(r => r === 'hit').length;
+  const pct = done > 0 ? Math.round((hits / done) * 100) : 0;
+
+  if (waitMode) {
+    document.getElementById('practiceSub').textContent =
+      'Complete! Wait mode was on, so every note counts as a hit — turn off ⏸ for a real accuracy score.';
+  } else {
+    document.getElementById('practiceSub').textContent =
+      `Complete! ${pct}% accuracy (${hits}/${done} correct)`;
+  }
+
   stopTempoEngine();
   stopMic();
 }
@@ -1552,6 +1566,13 @@ document.getElementById('waitToggle').addEventListener('click', (e) => {
   e.target.title = waitMode
     ? 'Waiting for the correct note (tap to switch back to strict tempo)'
     : 'Wait for the correct note instead of moving on';
+});
+document.getElementById('onsetToggle').addEventListener('click', (e) => {
+  onsetDetectionEnabled = !onsetDetectionEnabled;
+  e.target.classList.toggle('on', onsetDetectionEnabled);
+  e.target.title = onsetDetectionEnabled
+    ? 'Require a fresh pluck for each note (turn off if repeated notes aren\'t registering)'
+    : 'Onset detection off — repeated identical notes may advance from one sustained pluck';
 });
 document.getElementById('previewBtn').addEventListener('click', playPreview);
 document.getElementById('micGainSlider').addEventListener('input', (e) => {
