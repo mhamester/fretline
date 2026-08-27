@@ -915,12 +915,83 @@ function getElapsed() {
   return audioCtx.currentTime - practiceStartTime - totalPausedDuration;
 }
 
+function detectChordMatch(analyserNode, sampleRate, expectedFreqs, rmsNow) {
+  // We don't try to blindly identify arbitrary simultaneous pitches (true
+  // polyphonic pitch detection) — instead, since we already know exactly
+  // which notes a chord expects, we just check the spectrum for energy at
+  // each of those specific frequencies. Much more tractable, and accurate
+  // enough for typical chord voicings (though tightly-voiced low chords
+  // pushing right up against FFT bin resolution are the weak spot).
+  if (rmsNow < 0.006) {
+    return { matchedCount: 0, total: expectedFreqs.length, allMatched: false, matchedFlags: expectedFreqs.map(() => false) };
+  }
+  const freqData = new Float32Array(analyserNode.frequencyBinCount);
+  analyserNode.getFloatFrequencyData(freqData);
+  const binHz = sampleRate / analyserNode.fftSize;
+
+  // Noise floor estimate: median magnitude across the usable spectrum.
+  const usable = [];
+  for (let i = 4; i < freqData.length; i++) usable.push(freqData[i]);
+  usable.sort((a, b) => a - b);
+  const median = usable[Math.floor(usable.length / 2)];
+
+  const REQUIRED_MARGIN_DB = 12; // how far above the noise floor a note's peak must rise to count
+  const matchedFlags = expectedFreqs.map(f => {
+    const centerBin = Math.round(f / binHz);
+    let peak = -Infinity;
+    for (let d = -2; d <= 2; d++) {
+      const idx = centerBin + d;
+      if (idx >= 0 && idx < freqData.length) peak = Math.max(peak, freqData[idx]);
+    }
+    return (peak - median) >= REQUIRED_MARGIN_DB;
+  });
+  const matchedCount = matchedFlags.filter(Boolean).length;
+  return { matchedCount, total: expectedFreqs.length, allMatched: matchedCount === expectedFreqs.length, matchedFlags };
+}
+
+function onChordDetected(chordResult, notes) {
+  const heardEl = document.getElementById('heardNote');
+  const needle = document.getElementById('needle');
+
+  const names = notes.map((n, i) => {
+    const name = midiToName(n.midi);
+    return chordResult.matchedFlags[i] ? `<b style="color:var(--hit)">${name}</b>` : name;
+  }).join(' + ');
+  heardEl.innerHTML = `Chord: ${chordResult.matchedCount}/${chordResult.total} — ${names}`;
+
+  const pct = chordResult.total > 0 ? chordResult.matchedCount / chordResult.total : 0;
+  needle.style.left = `calc(50% + ${(pct - 0.5) * 90}%)`;
+  needle.style.background = chordResult.allMatched
+    ? 'var(--hit)'
+    : (chordResult.matchedCount > 0 ? 'var(--brass)' : 'var(--ink-dim)');
+
+  if (chordResult.allMatched) {
+    holdFrames++;
+    const t = scheduleTimes[seqIndex];
+    const elapsed = getElapsed();
+    const withinWindow = t === undefined ? false
+      : waitMode ? elapsed >= t - hitWindow
+      : (elapsed >= t - hitWindow && elapsed <= t + hitWindow);
+    if (holdFrames >= HOLD_NEEDED && withinWindow && (!onsetDetectionEnabled || noteOnsetSeen)) {
+      markResult('hit');
+    }
+  } else {
+    holdFrames = 0;
+  }
+}
+
 function pitchLoop() {
   if (!analyser) return;
   const buf = new Float32Array(analyser.fftSize);
   analyser.getFloatTimeDomainData(buf);
-  const expected = getExpectedFrequencies();
-  const freq = autoCorrelate(buf, audioCtx.sampleRate, expected);
+
+  // Compute RMS directly here (rather than only relying on autoCorrelate's
+  // side effect) so onset detection works the same regardless of which
+  // detection path (chord or single-note) runs below.
+  let rmsNow = 0;
+  for (let i = 0; i < buf.length; i++) rmsNow += buf[i] * buf[i];
+  rmsNow = Math.sqrt(rmsNow / buf.length);
+  lastRMS = rmsNow;
 
   // Onset detection: a fresh pluck shows up as a sudden jump above the
   // recent background level. This is what lets the app tell "you just
@@ -935,13 +1006,25 @@ function pitchLoop() {
     emaRMS = emaRMS * 0.93 + lastRMS * 0.07;
   }
 
-  if (freq > 60 && freq < 1200) {
-    const midi = freqToMidi(freq);
-    smoothedMidi = smoothedMidi === null ? midi : smoothedMidi * 0.6 + midi * 0.4;
-    onPitchDetected(smoothedMidi);
+  const currentGroup = (practiceRunning && currentTab && seqIndex < currentTab.activeSequence.length)
+    ? currentTab.activeSequence[seqIndex] : null;
+  const isChordTarget = currentGroup && currentGroup.notes.length > 1;
+
+  if (isChordTarget) {
+    const expectedFreqs = currentGroup.notes.map(n => midiToFreq(n.midi));
+    const chordResult = detectChordMatch(analyser, audioCtx.sampleRate, expectedFreqs, rmsNow);
+    onChordDetected(chordResult, currentGroup.notes);
   } else {
-    smoothedMidi = null;
-    onPitchDetected(null);
+    const expected = getExpectedFrequencies();
+    const freq = autoCorrelate(buf, audioCtx.sampleRate, expected);
+    if (freq > 60 && freq < 1200) {
+      const midi = freqToMidi(freq);
+      smoothedMidi = smoothedMidi === null ? midi : smoothedMidi * 0.6 + midi * 0.4;
+      onPitchDetected(smoothedMidi);
+    } else {
+      smoothedMidi = null;
+      onPitchDetected(null);
+    }
   }
 
   if (practiceRunning && currentTab) {
