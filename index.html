@@ -96,6 +96,20 @@
     padding: 7px 6px;
   }
 
+  .section-picker {
+    display: flex; gap: 6px; overflow-x: auto; margin-bottom: 8px;
+    padding-bottom: 2px;
+  }
+  .section-chip {
+    flex-shrink: 0;
+    background: var(--bg-raised); border: 1px solid var(--line); color: var(--ink-dim);
+    border-radius: 20px; padding: 6px 13px; font-size: 12px; font-weight: 600; cursor: pointer;
+    white-space: nowrap;
+  }
+  .section-chip.active {
+    background: var(--brass); color: #15130F; border-color: var(--brass);
+  }
+
   section { display: none; flex: 1; min-height: 0; overflow-y: auto; }
   section.active { display: flex; flex-direction: column; }
 
@@ -221,6 +235,11 @@
     gap: 2px;
     padding: 4px 12px;
   }
+  .section-label {
+    color: var(--brass); font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.05em; margin: 10px 0 4px; white-space: nowrap;
+  }
+  .section-label:first-child { margin-top: 0; }
   .tabrow {
     display: flex;
     align-items: center;
@@ -349,6 +368,19 @@
   .wf-chip.hit { background: var(--hit); color: #0e1a12; border-color: var(--hit); }
   .wf-chip.miss { background: var(--miss); color: #1a0e0a; border-color: var(--miss); }
 
+  .wf-section-marker {
+    position: absolute; top: 0; bottom: 0; width: 40px; z-index: 2;
+    display: flex; flex-direction: column; align-items: center; pointer-events: none;
+  }
+  .wf-section-line {
+    width: 1px; flex: 1; background: rgba(201,161,92,0.35);
+  }
+  .wf-section-tag {
+    font-size: 9px; color: var(--brass); background: var(--bg-raised);
+    border: 1px solid var(--brass-dim); border-radius: 8px; padding: 1px 5px;
+    white-space: nowrap; margin-top: 2px; transform: translateY(-2px);
+  }
+
   .countin-overlay {
     position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
     display: none; align-items: center; justify-content: center;
@@ -451,6 +483,8 @@
         <div class="heard" id="heardNote">Mic idle</div>
       </div>
 
+      <div class="section-picker" id="sectionPicker" style="display:none;"></div>
+
       <nav class="tabs view-toggle" data-toggle="display-mode">
         <button class="active" id="viewWaterfallBtn" data-mode="waterfall">🌊 Waterfall</button>
         <button data-mode="classic" id="viewClassicBtn">📜 Classic Tab</button>
@@ -494,55 +528,28 @@
 const STRING_ORDER = ['e','B','G','D','A','E']; // high to low, standard display order
 const OPEN_MIDI = { e: 64, B: 59, G: 55, D: 50, A: 45, E: 40 }; // standard tuning MIDI numbers
 
-function parseTab(raw) {
-  const lines = raw.split('\n').map(l => l.replace(/\r/g,'')).filter(l => l.trim().length > 0);
-  // Find 6 lines that look like tab lines: start with a string-name char then '|'
-  const tabLines = [];
-  for (const line of lines) {
-    const m = line.match(/^\s*([eEbBgGdDaA])\|?[-0-9hpb\/\\~x|]+\|?\s*$/);
-    if (m) tabLines.push(line);
-  }
-  if (tabLines.length < 6) {
-    throw new Error("Couldn't find 6 tab lines (one per string). Use standard format like: e|--3--0--|");
-  }
-  // take first 6 consecutive matching lines as one block (supports only first block for v1)
-  const block = tabLines.slice(0, 6);
+const TAB_LINE_REGEX = /^\s*([eEbBgGdDaA])\|?[-0-9hpb\/\\~x|]+\|?\s*$/;
+const STANDARD_STRING_KEYS = ['e','B','G','D','A','E'];
 
-  // identify string name per line (first non-space char)
-  const parsed = block.map(line => {
+function parseSectionBlock(blockLines) {
+  const parsed = blockLines.map(line => {
     const nameChar = line.trim()[0].toLowerCase();
     const body = line.replace(/^\s*[eEbBgGdDaA]/, '').replace(/\|/g, '|');
     return { nameChar, body };
   });
+  const maxLen = Math.max(...parsed.map(p => p.body.length));
+  const padded = parsed.map(p => p.body.padEnd(maxLen, '-'));
 
-  // map to canonical order e B G D A E by matching name chars, allow e/E ambiguity by position
-  // If names collide (e and E both lowercase 'e'), fall back to positional order (top->bottom = e,B,G,D,A,E)
-  const order = ['e','b','g','d','a','e2'];
-  let canon;
-  const nameChars = parsed.map(p => p.nameChar);
-  const hasDupE = nameChars.filter(c => c === 'e').length === 2;
-  if (hasDupE) {
-    canon = parsed; // assume already top-to-bottom = e,B,G,D,A,E
-  } else {
-    canon = parsed;
-  }
-
-  const stringKeys = ['e','B','G','D','A','E'];
-  const maxLen = Math.max(...canon.map(p => p.body.length));
-  const padded = canon.map(p => p.body.padEnd(maxLen, '-'));
-
-  // walk column by column, extract frets (handle multi-digit frets like 10,12)
-  const notesByCol = []; // { col, events: [{stringIdx, fret}] }
+  const notesByCol = [];
   let col = 0;
   while (col < maxLen) {
     const events = [];
     for (let s = 0; s < 6; s++) {
       const ch = padded[s][col];
       if (ch && /[0-9]/.test(ch)) {
-        // check for second digit
         let numStr = ch;
         let consumed = 1;
-        const next = padded[s][col+1];
+        const next = padded[s][col + 1];
         if (next && /[0-9]/.test(next)) {
           numStr += next;
           consumed = 2;
@@ -559,21 +566,92 @@ function parseTab(raw) {
     }
   }
 
-  if (notesByCol.length === 0) {
+  return notesByCol.map(group => ({
+    col: group.col,
+    notes: group.events.map(e => ({
+      stringKey: STANDARD_STRING_KEYS[e.stringIdx],
+      fret: e.fret,
+      midi: OPEN_MIDI[STANDARD_STRING_KEYS[e.stringIdx]] + e.fret
+    }))
+  }));
+}
+
+function parseTab(raw) {
+  const rawLines = raw.split('\n').map(l => l.replace(/\r/g, ''));
+  const isTabLine = rawLines.map(l => TAB_LINE_REGEX.test(l));
+
+  const rawSections = []; // { label, blockLines }
+  let i = 0;
+  while (i < rawLines.length) {
+    if (isTabLine[i]) {
+      let j = i;
+      const runLines = [];
+      while (j < rawLines.length && isTabLine[j]) {
+        runLines.push(rawLines[j]);
+        j++;
+      }
+      let k = 0;
+      while (k + 6 <= runLines.length) {
+        // Look for a short label on the 1-2 lines immediately before this
+        // run started (e.g. "[Chorus]", "Verse 2:") — skip blank lines,
+        // but stop looking if we hit actual tab content or the candidate
+        // is too long to plausibly be a title rather than a lyric line.
+        let label = null;
+        for (let b = i - 1; b >= Math.max(0, i - 3); b--) {
+          if (isTabLine[b]) break;
+          const cand = rawLines[b].trim();
+          if (cand.length === 0) continue;
+          if (cand.length <= 30) {
+            label = cand.replace(/^\[|\]$/g, '').replace(/:$/, '').trim();
+          }
+          break;
+        }
+        rawSections.push({ label, blockLines: runLines.slice(k, k + 6) });
+        k += 6;
+      }
+      i = j;
+    } else {
+      i++;
+    }
+  }
+
+  if (rawSections.length === 0) {
+    throw new Error("Couldn't find 6 tab lines (one per string). Use standard format like: e|--3--0--|");
+  }
+
+  const sections = rawSections
+    .map((sec, idx) => ({
+      label: sec.label || `Section ${idx + 1}`,
+      sequence: parseSectionBlock(sec.blockLines)
+    }))
+    .filter(s => s.sequence.length > 0);
+
+  if (sections.length === 0) {
     throw new Error("No notes found in the tab — check the format (digits = frets, '-' = rest).");
   }
 
-  // flatten into a linear note sequence (one entry per string hit, grouped by column = chord)
-  const sequence = notesByCol.map(group => ({
-    col: group.col,
-    notes: group.events.map(e => ({
-      stringKey: stringKeys[e.stringIdx],
-      fret: e.fret,
-      midi: OPEN_MIDI[stringKeys[e.stringIdx]] + e.fret
-    }))
-  }));
+  // Stitch sections into one continuous timeline for "whole song" playback,
+  // with a small gap between sections and a marker for where each begins.
+  const GAP_COLS = 4;
+  let globalOffset = 0;
+  const wholeSequence = [];
+  const wholeSectionMarkers = [];
+  sections.forEach(sec => {
+    wholeSectionMarkers.push({ label: sec.label, startIndex: wholeSequence.length });
+    const maxCol = Math.max(...sec.sequence.map(g => g.col));
+    sec.sequence.forEach(g => {
+      wholeSequence.push({ col: g.col + globalOffset, notes: g.notes });
+    });
+    globalOffset += maxCol + GAP_COLS;
+  });
 
-  return { stringKeys, sequence, raw };
+  return {
+    stringKeys: STANDARD_STRING_KEYS,
+    sections,
+    wholeSequence,
+    wholeSectionMarkers,
+    raw
+  };
 }
 
 function midiToName(midi) {
@@ -813,8 +891,8 @@ function setMicStatus(msg, cls) {
 
 function getExpectedFrequencies() {
   if (!practiceRunning || !currentTab) return null;
-  if (seqIndex >= currentTab.parsed.sequence.length) return null;
-  const group = currentTab.parsed.sequence[seqIndex];
+  if (seqIndex >= currentTab.activeSequence.length) return null;
+  const group = currentTab.activeSequence[seqIndex];
   return group.notes.map(n => midiToFreq(n.midi));
 }
 
@@ -922,7 +1000,7 @@ function startTempoEngine() {
   secPerChar = secPerBeat / subdivision;
   countInSeconds = COUNT_IN_BEATS * secPerBeat;
   hitWindow = computeHitWindow(bpm);
-  scheduleTimes = currentTab.parsed.sequence.map(g => countInSeconds + g.col * secPerChar);
+  scheduleTimes = currentTab.activeSequence.map(g => countInSeconds + g.col * secPerChar);
   isPaused = false;
   totalPausedDuration = 0;
 
@@ -1001,7 +1079,7 @@ function playPreview() {
   const spc = spb / subdivision;
   const leadIn = 0.25;
 
-  currentTab.parsed.sequence.forEach(group => {
+  currentTab.activeSequence.forEach(group => {
     const t = audioCtx.currentTime + leadIn + group.col * spc;
     group.notes.forEach(n => {
       const freq = midiToFreq(n.midi);
@@ -1009,7 +1087,7 @@ function playPreview() {
     });
   });
 
-  const lastCol = currentTab.parsed.sequence[currentTab.parsed.sequence.length - 1].col;
+  const lastCol = currentTab.activeSequence[currentTab.activeSequence.length - 1].col;
   const totalDuration = leadIn + lastCol * spc + 1.2;
   previewEndTimer = setTimeout(() => {
     previewPlaying = false;
@@ -1047,7 +1125,7 @@ function buildWaterfall() {
   });
 
   let maxTime = 1;
-  currentTab.parsed.sequence.forEach((group, idx) => {
+  currentTab.activeSequence.forEach((group, idx) => {
     const t = scheduleTimes[idx];
     maxTime = Math.max(maxTime, t);
     group.notes.forEach(n => {
@@ -1066,6 +1144,20 @@ function buildWaterfall() {
   rows.forEach(row => { row.style.width = totalWidth + 'px'; layer.appendChild(row); });
   layer.style.width = totalWidth + 'px';
   layer.style.transform = 'translateX(0px)';
+
+  // Show section boundaries when practicing the whole song
+  if (currentTab.activeMode === 'whole' && currentTab.parsed.wholeSectionMarkers.length > 1) {
+    currentTab.parsed.wholeSectionMarkers.forEach(marker => {
+      if (marker.startIndex === 0) return; // skip the very first section, it's obvious
+      const t = scheduleTimes[marker.startIndex];
+      if (t === undefined) return;
+      const divider = document.createElement('div');
+      divider.className = 'wf-section-marker';
+      divider.style.left = (LANE_OFFSET + t * PX_PER_SEC - 20) + 'px';
+      divider.innerHTML = `<div class="wf-section-line"></div><div class="wf-section-tag">${marker.label}</div>`;
+      layer.appendChild(divider);
+    });
+  }
 }
 
 function updateWaterfallScroll(elapsed) {
@@ -1086,7 +1178,7 @@ function updateCountInOverlay(elapsed) {
 
 function updateActiveChip(elapsed) {
   document.querySelectorAll('.wf-chip.active').forEach(c => c.classList.remove('active'));
-  if (!currentTab || seqIndex >= currentTab.parsed.sequence.length) return;
+  if (!currentTab || seqIndex >= currentTab.activeSequence.length) return;
   const t = scheduleTimes[seqIndex];
   const inWindow = waitMode
     ? elapsed >= t - hitWindow
@@ -1104,7 +1196,7 @@ function updateWaterfallResult(idx, status) {
 }
 
 function judgeTiming(elapsed) {
-  if (!currentTab || seqIndex >= currentTab.parsed.sequence.length) return;
+  if (!currentTab || seqIndex >= currentTab.activeSequence.length) return;
   const t = scheduleTimes[seqIndex];
   if (results[seqIndex] === null && elapsed > t + hitWindow) {
     if (waitMode) {
@@ -1120,12 +1212,65 @@ function judgeTiming(elapsed) {
   }
 }
 
+function setActiveSection(mode) {
+  if (!currentTab) return;
+  currentTab.activeMode = mode; // 'whole' or a section index
+  currentTab.activeSequence = mode === 'whole'
+    ? currentTab.parsed.wholeSequence
+    : currentTab.parsed.sections[mode].sequence;
+
+  // Switching ranges mid-practice would leave timing/scores in a
+  // meaningless state, so treat it like a reset.
+  if (previewPlaying) stopPreview();
+  practiceRunning = false;
+  isPaused = false;
+  totalPausedDuration = 0;
+  stopTempoEngine();
+  stopMic();
+  document.getElementById('startBtn').textContent = 'Start Practice';
+  document.getElementById('globalScore').style.display = 'none';
+
+  seqIndex = 0;
+  results = new Array(currentTab.activeSequence.length).fill(null);
+
+  const label = mode === 'whole' ? 'Whole Song' : currentTab.parsed.sections[mode].label;
+  document.getElementById('practiceSub').textContent = `Practicing: ${label} — tap Start, then play along`;
+
+  renderSectionPicker();
+  renderTab();
+  updateTarget();
+}
+
+function renderSectionPicker() {
+  const row = document.getElementById('sectionPicker');
+  row.innerHTML = '';
+  if (!currentTab || currentTab.parsed.sections.length <= 1) {
+    row.style.display = 'none';
+    return;
+  }
+  row.style.display = 'flex';
+
+  const makeChip = (mode, label) => {
+    const chip = document.createElement('button');
+    chip.className = 'section-chip' + (currentTab.activeMode === mode ? ' active' : '');
+    chip.textContent = label;
+    chip.addEventListener('click', () => setActiveSection(mode));
+    return chip;
+  };
+
+  row.appendChild(makeChip('whole', 'Whole Song'));
+  currentTab.parsed.sections.forEach((sec, i) => {
+    row.appendChild(makeChip(i, sec.label));
+  });
+}
+
 function loadTab(tabObj) {
   try {
     const parsed = parseTab(tabObj.tab);
-    currentTab = { ...tabObj, parsed };
+    currentTab = { ...tabObj, parsed, activeMode: 'whole', activeSequence: parsed.wholeSequence };
     seqIndex = 0;
-    results = new Array(parsed.sequence.length).fill(null);
+    results = new Array(currentTab.activeSequence.length).fill(null);
+    renderSectionPicker();
     renderTab();
     renderWaterfallLabels();
     document.getElementById('practiceEmpty').style.display = 'none';
@@ -1139,15 +1284,16 @@ function loadTab(tabObj) {
   }
 }
 
-function renderTab() {
-  const container = document.getElementById('tabRender');
-  container.innerHTML = '';
-  const stringKeys = currentTab.parsed.stringKeys;
-
-  // Build a per-string array of cells aligned to sequence index
+function renderSectionBlock(container, stringKeys, sequence, idxOffset, label) {
+  if (label) {
+    const headerEl = document.createElement('div');
+    headerEl.className = 'section-label';
+    headerEl.textContent = label;
+    container.appendChild(headerEl);
+  }
   const rows = stringKeys.map(key => ({ key, cells: [] }));
-
-  currentTab.parsed.sequence.forEach((group, idx) => {
+  sequence.forEach((group, localIdx) => {
+    const idx = idxOffset + localIdx;
     const notesOnRow = {};
     group.notes.forEach(n => { notesOnRow[n.stringKey] = n.fret; });
     stringKeys.forEach((key, rIdx) => {
@@ -1158,14 +1304,13 @@ function renderTab() {
       }
     });
   });
-
   rows.forEach(row => {
     const rowEl = document.createElement('div');
     rowEl.className = 'tabrow tab-mono';
-    const label = document.createElement('span');
-    label.className = 'stringname';
-    label.textContent = row.key;
-    rowEl.appendChild(label);
+    const label2 = document.createElement('span');
+    label2.className = 'stringname';
+    label2.textContent = row.key;
+    rowEl.appendChild(label2);
     row.cells.forEach(cell => {
       const cellEl = document.createElement('span');
       cellEl.className = 'fretcell';
@@ -1180,6 +1325,26 @@ function renderTab() {
     });
     container.appendChild(rowEl);
   });
+}
+
+function renderTab() {
+  const container = document.getElementById('tabRender');
+  container.innerHTML = '';
+  const stringKeys = currentTab.parsed.stringKeys;
+
+  if (currentTab.activeMode === 'whole') {
+    // Stack every section as its own labeled block, but keep data-idx
+    // values as GLOBAL indices into the whole-song sequence so hit/miss
+    // coloring (driven by the shared `results` array) lines up correctly.
+    const showLabels = currentTab.parsed.sections.length > 1;
+    currentTab.parsed.sections.forEach((sec, sIdx) => {
+      const marker = currentTab.parsed.wholeSectionMarkers[sIdx];
+      renderSectionBlock(container, stringKeys, sec.sequence, marker.startIndex, showLabels ? sec.label : null);
+    });
+  } else {
+    const sec = currentTab.parsed.sections[currentTab.activeMode];
+    renderSectionBlock(container, stringKeys, sec.sequence, 0, null);
+  }
   highlightCurrent();
 }
 
@@ -1200,11 +1365,11 @@ function highlightCurrent() {
 
 function updateTarget() {
   const targetEl = document.getElementById('targetNote');
-  if (!currentTab || seqIndex >= currentTab.parsed.sequence.length) {
+  if (!currentTab || seqIndex >= currentTab.activeSequence.length) {
     targetEl.textContent = practiceRunning ? 'Done!' : '—';
     return;
   }
-  const group = currentTab.parsed.sequence[seqIndex];
+  const group = currentTab.activeSequence[seqIndex];
   const names = group.notes.map(n => `${n.stringKey} str, fret ${n.fret} (${midiToName(n.midi)})`);
   targetEl.textContent = names.join(' + ');
 }
@@ -1224,13 +1389,13 @@ function onPitchDetected(midi) {
   const roundedMidi = Math.round(midi);
   heardEl.innerHTML = `Hearing <b>${midiToName(roundedMidi)}</b>`;
 
-  if (!practiceRunning || !currentTab || seqIndex >= currentTab.parsed.sequence.length) {
+  if (!practiceRunning || !currentTab || seqIndex >= currentTab.activeSequence.length) {
     needle.style.left = '50%';
     needle.style.background = 'var(--ink-dim)';
     return;
   }
 
-  const group = currentTab.parsed.sequence[seqIndex];
+  const group = currentTab.activeSequence[seqIndex];
   // pick the closest expected note in this chord/group to the detected pitch
   let best = null, bestDiff = Infinity;
   for (const n of group.notes) {
@@ -1272,7 +1437,7 @@ function markResult(status) {
   highlightCurrent();
   updateTarget();
   updateScore();
-  if (seqIndex >= currentTab.parsed.sequence.length) {
+  if (seqIndex >= currentTab.activeSequence.length) {
     finishPractice();
   }
 }
@@ -1318,7 +1483,7 @@ document.getElementById('resetBtn').addEventListener('click', () => {
   if (!currentTab) return;
   if (previewPlaying) stopPreview();
   seqIndex = 0;
-  results = new Array(currentTab.parsed.sequence.length).fill(null);
+  results = new Array(currentTab.activeSequence.length).fill(null);
   practiceRunning = false;
   isPaused = false;
   totalPausedDuration = 0;
