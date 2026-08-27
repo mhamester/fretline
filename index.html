@@ -733,6 +733,13 @@ let inputGainNode = null;
 let micGainValue = 6; // digital boost applied before pitch detection — helps quiet/distant playing register
 let rafId = null;
 let smoothedMidi = null;
+let lastRMS = 0;
+let emaRMS = 0.001;      // slow-moving background level, used to spot sudden attack transients
+let lastOnsetAt = -9999; // performance.now() timestamp of the last detected pluck
+let noteOnsetSeen = false; // has a fresh pluck happened since the current target note became active?
+const ONSET_RATIO = 1.7;      // how much louder than the recent background counts as a new attack
+const ONSET_MIN_RMS = 0.012;  // floor so quiet noise fluctuations never count as a pluck
+const ONSET_REFRACTORY_MS = 110; // minimum gap between two onsets, avoids double-triggering one pluck's decay
 
 function autoCorrelate(buf, sampleRate, expectedFreqs) {
   // YIN pitch detection. Uses a true global-minimum search (more reliable
@@ -746,6 +753,7 @@ function autoCorrelate(buf, sampleRate, expectedFreqs) {
   let rms = 0;
   for (let i = 0; i < SIZE; i++) rms += buf[i] * buf[i];
   rms = Math.sqrt(rms / SIZE);
+  lastRMS = rms; // exposed for onset (fresh-pluck) detection in pitchLoop
   if (rms < 0.006) return -1; // too quiet / no signal
 
   const halfSize = Math.floor(SIZE / 2);
@@ -913,6 +921,19 @@ function pitchLoop() {
   const expected = getExpectedFrequencies();
   const freq = autoCorrelate(buf, audioCtx.sampleRate, expected);
 
+  // Onset detection: a fresh pluck shows up as a sudden jump above the
+  // recent background level. This is what lets the app tell "you just
+  // played this note again" apart from "this note is still ringing from
+  // before" — essential for repeated identical notes in a row.
+  if (practiceRunning) {
+    const now = performance.now();
+    if (lastRMS > emaRMS * ONSET_RATIO && lastRMS > ONSET_MIN_RMS && (now - lastOnsetAt) > ONSET_REFRACTORY_MS) {
+      noteOnsetSeen = true;
+      lastOnsetAt = now;
+    }
+    emaRMS = emaRMS * 0.93 + lastRMS * 0.07;
+  }
+
   if (freq > 60 && freq < 1200) {
     const midi = freqToMidi(freq);
     smoothedMidi = smoothedMidi === null ? midi : smoothedMidi * 0.6 + midi * 0.4;
@@ -1003,6 +1024,9 @@ function startTempoEngine() {
   scheduleTimes = currentTab.activeSequence.map(g => countInSeconds + g.col * secPerChar);
   isPaused = false;
   totalPausedDuration = 0;
+  noteOnsetSeen = false;
+  emaRMS = 0.001;
+  lastOnsetAt = -9999;
 
   const startDelay = 0.15;
   practiceStartTime = audioCtx.currentTime + startDelay;
@@ -1414,7 +1438,7 @@ function onPitchDetected(midi) {
     const withinWindow = t === undefined ? false
       : waitMode ? elapsed >= t - hitWindow
       : (elapsed >= t - hitWindow && elapsed <= t + hitWindow);
-    if (holdFrames >= HOLD_NEEDED && withinWindow) {
+    if (holdFrames >= HOLD_NEEDED && withinWindow && noteOnsetSeen) {
       markResult('hit');
     }
   } else {
@@ -1434,6 +1458,7 @@ function markResult(status) {
   updateWaterfallResult(seqIndex, status);
   seqIndex++;
   holdFrames = 0;
+  noteOnsetSeen = false; // the next note needs its own fresh pluck, not a carry-over ring-out
   highlightCurrent();
   updateTarget();
   updateScore();
