@@ -202,10 +202,11 @@
     background: var(--bg-raised);
     border: 1px solid var(--line);
     border-radius: 14px;
-    padding: 14px 4px;
+    padding: 10px 4px;
     overflow-x: auto;
-    flex: 1;
-    min-height: 0;
+    overflow-y: auto;
+    max-height: 108px;
+    flex-shrink: 0;
   }
   .tabline {
     display: inline-flex;
@@ -253,6 +254,98 @@
   .mic-status { font-size: 11px; color: var(--ink-dim); text-align: center; margin-top: 8px; }
   .mic-status.live { color: var(--hit); }
   .mic-status.err { color: var(--miss); }
+
+  /* ---- Tempo / metronome controls ---- */
+  .tempo-row {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 12px;
+  }
+  .tempo-field {
+    display: flex; align-items: center; gap: 4px;
+    background: var(--bg-raised); border: 1px solid var(--line);
+    border-radius: 10px; padding: 5px 6px;
+  }
+  .tempo-field label {
+    font-size: 10px; color: var(--ink-dim); text-transform: uppercase;
+    letter-spacing: 0.05em; padding: 0 2px;
+  }
+  .tempo-field input[type=number] {
+    width: 44px; background: transparent; border: none; color: var(--ink);
+    font-size: 15px; font-weight: 700; text-align: center;
+    -moz-appearance: textfield;
+  }
+  .tempo-field input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+  .stepper-btn {
+    background: var(--line); color: var(--ink); border: none;
+    width: 24px; height: 24px; border-radius: 6px; font-size: 15px;
+    line-height: 1; cursor: pointer; flex-shrink: 0;
+  }
+  .stepper-btn:active { opacity: 0.7; }
+  .grid-select {
+    background: var(--bg-raised); border: 1px solid var(--line); color: var(--ink-dim);
+    border-radius: 10px; padding: 8px 8px; font-size: 11px; flex: 1;
+  }
+  .metro-toggle {
+    background: var(--bg-raised); border: 1px solid var(--line); color: var(--ink-dim);
+    border-radius: 10px; padding: 8px 11px; font-size: 15px; cursor: pointer; flex-shrink: 0;
+  }
+  .metro-toggle.on { color: var(--brass); border-color: var(--brass-dim); }
+
+  /* ---- Waterfall ---- */
+  .waterfall-wrap {
+    position: relative;
+    background: var(--bg-raised);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    margin-bottom: 10px;
+    flex: 1;
+    min-height: 180px;
+    overflow: hidden;
+  }
+  .wf-scrollarea {
+    position: relative;
+    width: 100%; height: 100%;
+    overflow: hidden;
+  }
+  .wf-hitline {
+    position: absolute; top: 0; bottom: 0; left: 62px; width: 2px;
+    background: var(--brass); z-index: 3;
+  }
+  .wf-hitline::after {
+    content: ''; position: absolute; top: 0; bottom: 0; left: -18px; width: 36px;
+    background: linear-gradient(90deg, transparent, rgba(201,161,92,0.12), transparent);
+  }
+  .wf-labels {
+    position: absolute; top: 0; left: 0; bottom: 0; width: 26px;
+    display: flex; flex-direction: column; z-index: 4;
+    background: linear-gradient(90deg, var(--bg-raised) 55%, transparent);
+  }
+  .wf-labels div {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    font-size: 11px; color: var(--ink-dim);
+  }
+  .wf-notes-layer {
+    position: absolute; top: 0; left: 26px; height: 100%; will-change: transform;
+  }
+  .wf-lane-row {
+    position: absolute; left: 0; height: 34px;
+  }
+  .wf-lane-row:not(:last-child) { border-bottom: 1px solid rgba(255,255,255,0.04); }
+  .wf-chip {
+    position: absolute; top: 3px; width: 27px; height: 27px; border-radius: 8px;
+    background: var(--pending); color: var(--ink);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 12px; border: 1px solid var(--line);
+  }
+  .wf-chip.active {
+    background: var(--brass); color: #15130F; box-shadow: 0 0 0 2px var(--brass);
+  }
+  .wf-chip.hit { background: var(--hit); color: #0e1a12; border-color: var(--hit); }
+  .wf-chip.miss { background: var(--miss); color: #1a0e0a; border-color: var(--miss); }
+
+  .countin-overlay {
+    position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+    background: rgba(21,19,15,0.78); font-size: 46px; font-weight: 800; color: var(--brass); z-index: 5;
+  }
 
   .score-pill {
     font-size: 12px; color: var(--ink-dim); background: var(--bg-raised);
@@ -319,10 +412,33 @@
         </div>
       </div>
 
+      <div class="tempo-row">
+        <div class="tempo-field">
+          <button class="stepper-btn" id="bpmDown">−</button>
+          <label>BPM</label>
+          <input type="number" id="bpmInput" value="80" min="30" max="220">
+          <button class="stepper-btn" id="bpmUp">+</button>
+        </div>
+        <select class="grid-select" id="gridSelect">
+          <option value="4" selected>1 char = 16th note</option>
+          <option value="2">1 char = 8th note</option>
+        </select>
+        <button class="metro-toggle on" id="metroToggle" title="Toggle metronome sound">🔊</button>
+      </div>
+
       <div class="tuner">
         <div class="target">Listening for <b id="targetNote">—</b></div>
         <div class="meter"><div class="center-mark"></div><div class="needle" id="needle"></div></div>
         <div class="heard" id="heardNote">Mic idle</div>
+      </div>
+
+      <div class="waterfall-wrap">
+        <div class="wf-scrollarea" id="wfScrollarea">
+          <div class="wf-hitline"></div>
+          <div class="wf-labels" id="wfLabels"></div>
+          <div class="wf-notes-layer" id="wfNotesLayer"></div>
+        </div>
+        <div class="countin-overlay" id="countInOverlay">4</div>
       </div>
 
       <div class="tabline-wrap">
@@ -673,6 +789,15 @@ function pitchLoop() {
     smoothedMidi = null;
     onPitchDetected(null);
   }
+
+  if (practiceRunning && currentTab) {
+    const elapsed = audioCtx.currentTime - practiceStartTime;
+    updateWaterfallScroll(elapsed);
+    updateCountInOverlay(elapsed);
+    updateActiveChip(elapsed);
+    judgeTiming(elapsed);
+  }
+
   rafId = requestAnimationFrame(pitchLoop);
 }
 
@@ -685,8 +810,158 @@ let seqIndex = 0;
 let results = []; // 'hit' | 'miss' | null per sequence index
 let practiceRunning = false;
 let holdFrames = 0;
-const HOLD_NEEDED = 6; // consecutive good frames to count as a hit
+const HOLD_NEEDED = 3; // consecutive good frames to count as a hit (short — timing windows are brief)
 const CENTS_TOLERANCE = 45; // how close in cents counts as correct
+
+// --- Tempo / metronome / waterfall state ---
+const COUNT_IN_BEATS = 4;
+const PX_PER_SEC = 130;      // waterfall scroll scale
+const LANE_HEIGHT = 34;
+const LANE_OFFSET = 36;      // px: aligns a chip with the hitline when elapsed === its scheduled time
+let bpm = 80;
+let subdivision = 4;         // characters per beat (grid resolution assumption)
+let metronomeOn = true;
+let schedulerTimer = null;
+let nextClickTime = 0;
+let clickCounter = 0;
+let secPerBeat = 60 / bpm;
+let secPerChar = secPerBeat / subdivision;
+let countInSeconds = COUNT_IN_BEATS * secPerBeat;
+let scheduleTimes = [];      // seconds offset per sequence index
+let hitWindow = 0.25;
+let practiceStartTime = 0;
+
+function computeHitWindow(currentBpm) {
+  const spb = 60 / currentBpm;
+  return Math.min(0.4, Math.max(0.12, 0.35 * spb));
+}
+
+function scheduleClick(time, accent) {
+  if (!metronomeOn || !audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.frequency.value = accent ? 1500 : 1000;
+  gain.gain.setValueAtTime(0.0001, time);
+  gain.gain.exponentialRampToValueAtTime(0.5, time + 0.001);
+  gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.05);
+  osc.connect(gain).connect(audioCtx.destination);
+  osc.start(time);
+  osc.stop(time + 0.06);
+}
+
+function metronomeScheduler() {
+  if (!audioCtx) return;
+  const scheduleAhead = 0.1;
+  while (nextClickTime < audioCtx.currentTime + scheduleAhead) {
+    scheduleClick(nextClickTime, clickCounter % 4 === 0);
+    nextClickTime += secPerBeat;
+    clickCounter++;
+  }
+}
+
+function startTempoEngine() {
+  secPerBeat = 60 / bpm;
+  secPerChar = secPerBeat / subdivision;
+  countInSeconds = COUNT_IN_BEATS * secPerBeat;
+  hitWindow = computeHitWindow(bpm);
+  scheduleTimes = currentTab.parsed.sequence.map(g => countInSeconds + g.col * secPerChar);
+
+  const startDelay = 0.15;
+  practiceStartTime = audioCtx.currentTime + startDelay;
+  nextClickTime = practiceStartTime;
+  clickCounter = 0;
+
+  buildWaterfall();
+  if (schedulerTimer) clearInterval(schedulerTimer);
+  schedulerTimer = setInterval(metronomeScheduler, 25);
+}
+
+function stopTempoEngine() {
+  if (schedulerTimer) { clearInterval(schedulerTimer); schedulerTimer = null; }
+  document.getElementById('countInOverlay').style.display = 'none';
+}
+
+function renderWaterfallLabels() {
+  const labels = document.getElementById('wfLabels');
+  labels.innerHTML = '';
+  currentTab.parsed.stringKeys.forEach(key => {
+    const d = document.createElement('div');
+    d.textContent = key;
+    labels.appendChild(d);
+  });
+}
+
+function buildWaterfall() {
+  const layer = document.getElementById('wfNotesLayer');
+  layer.innerHTML = '';
+  const stringKeys = currentTab.parsed.stringKeys;
+  const rows = stringKeys.map(() => document.createElement('div'));
+  rows.forEach((row, i) => {
+    row.className = 'wf-lane-row';
+    row.style.top = (i * LANE_HEIGHT) + 'px';
+  });
+
+  let maxTime = 1;
+  currentTab.parsed.sequence.forEach((group, idx) => {
+    const t = scheduleTimes[idx];
+    maxTime = Math.max(maxTime, t);
+    group.notes.forEach(n => {
+      const rIdx = stringKeys.indexOf(n.stringKey);
+      if (rIdx === -1) return;
+      const chip = document.createElement('div');
+      chip.className = 'wf-chip pending';
+      chip.textContent = n.fret;
+      chip.dataset.idx = idx;
+      chip.style.left = (LANE_OFFSET + t * PX_PER_SEC) + 'px';
+      rows[rIdx].appendChild(chip);
+    });
+  });
+
+  const totalWidth = LANE_OFFSET + (maxTime * PX_PER_SEC) + 200;
+  rows.forEach(row => { row.style.width = totalWidth + 'px'; layer.appendChild(row); });
+  layer.style.width = totalWidth + 'px';
+  layer.style.transform = 'translateX(0px)';
+}
+
+function updateWaterfallScroll(elapsed) {
+  const layer = document.getElementById('wfNotesLayer');
+  if (layer) layer.style.transform = `translateX(${-(elapsed * PX_PER_SEC)}px)`;
+}
+
+function updateCountInOverlay(elapsed) {
+  const overlay = document.getElementById('countInOverlay');
+  if (elapsed < countInSeconds) {
+    overlay.style.display = 'flex';
+    const beatsLeft = Math.max(1, COUNT_IN_BEATS - Math.floor(elapsed / secPerBeat));
+    overlay.textContent = beatsLeft;
+  } else {
+    overlay.style.display = 'none';
+  }
+}
+
+function updateActiveChip(elapsed) {
+  document.querySelectorAll('.wf-chip.active').forEach(c => c.classList.remove('active'));
+  if (!currentTab || seqIndex >= currentTab.parsed.sequence.length) return;
+  const t = scheduleTimes[seqIndex];
+  if (elapsed >= t - hitWindow && elapsed <= t + hitWindow) {
+    document.querySelectorAll(`.wf-chip[data-idx="${seqIndex}"]`).forEach(c => c.classList.add('active'));
+  }
+}
+
+function updateWaterfallResult(idx, status) {
+  document.querySelectorAll(`.wf-chip[data-idx="${idx}"]`).forEach(c => {
+    c.classList.remove('active', 'pending');
+    c.classList.add(status);
+  });
+}
+
+function judgeTiming(elapsed) {
+  if (!currentTab || seqIndex >= currentTab.parsed.sequence.length) return;
+  const t = scheduleTimes[seqIndex];
+  if (results[seqIndex] === null && elapsed > t + hitWindow) {
+    markResult('miss'); // time's up for this note — keep the tempo flowing
+  }
+}
 
 function loadTab(tabObj) {
   try {
@@ -695,6 +970,7 @@ function loadTab(tabObj) {
     seqIndex = 0;
     results = new Array(parsed.sequence.length).fill(null);
     renderTab();
+    renderWaterfallLabels();
     document.getElementById('practiceEmpty').style.display = 'none';
     document.getElementById('practiceMain').style.display = 'flex';
     document.getElementById('practiceTitle').textContent = tabObj.title || 'Custom tab';
@@ -811,7 +1087,10 @@ function onPitchDetected(midi) {
   if (Math.abs(bestDiff) <= CENTS_TOLERANCE) {
     needle.style.background = 'var(--hit)';
     holdFrames++;
-    if (holdFrames >= HOLD_NEEDED) {
+    const t = scheduleTimes[seqIndex];
+    const elapsed = audioCtx ? audioCtx.currentTime - practiceStartTime : 0;
+    const withinWindow = t !== undefined && elapsed >= t - hitWindow && elapsed <= t + hitWindow;
+    if (holdFrames >= HOLD_NEEDED && withinWindow) {
       markResult('hit');
     }
   } else {
@@ -822,6 +1101,7 @@ function onPitchDetected(midi) {
 
 function markResult(status) {
   results[seqIndex] = status;
+  updateWaterfallResult(seqIndex, status);
   seqIndex++;
   holdFrames = 0;
   highlightCurrent();
@@ -846,6 +1126,7 @@ function finishPractice() {
   practiceRunning = false;
   document.getElementById('startBtn').textContent = 'Start Practice';
   document.getElementById('practiceSub').textContent = 'Run complete — check your accuracy above';
+  stopTempoEngine();
   stopMic();
 }
 
@@ -854,6 +1135,7 @@ document.getElementById('startBtn').addEventListener('click', async () => {
   if (practiceRunning) {
     practiceRunning = false;
     document.getElementById('startBtn').textContent = 'Start Practice';
+    stopTempoEngine();
     stopMic();
     return;
   }
@@ -861,7 +1143,8 @@ document.getElementById('startBtn').addEventListener('click', async () => {
   if (!ok) return;
   practiceRunning = true;
   document.getElementById('startBtn').textContent = 'Stop';
-  document.getElementById('practiceSub').textContent = 'Play the highlighted note';
+  document.getElementById('practiceSub').textContent = `Count-in, then play at ${bpm} BPM`;
+  startTempoEngine();
   updateTarget();
 });
 
@@ -870,12 +1153,39 @@ document.getElementById('resetBtn').addEventListener('click', () => {
   seqIndex = 0;
   results = new Array(currentTab.parsed.sequence.length).fill(null);
   practiceRunning = false;
+  stopTempoEngine();
   stopMic();
   document.getElementById('startBtn').textContent = 'Start Practice';
   document.getElementById('practiceSub').textContent = 'Tap Start, then play along';
   document.getElementById('globalScore').style.display = 'none';
   highlightCurrent();
   updateTarget();
+});
+
+document.getElementById('bpmInput').addEventListener('change', (e) => {
+  let v = parseInt(e.target.value, 10);
+  if (isNaN(v)) v = 80;
+  v = Math.max(30, Math.min(220, v));
+  bpm = v;
+  e.target.value = v;
+});
+document.getElementById('bpmUp').addEventListener('click', () => {
+  const input = document.getElementById('bpmInput');
+  bpm = Math.min(220, bpm + 5);
+  input.value = bpm;
+});
+document.getElementById('bpmDown').addEventListener('click', () => {
+  const input = document.getElementById('bpmInput');
+  bpm = Math.max(30, bpm - 5);
+  input.value = bpm;
+});
+document.getElementById('gridSelect').addEventListener('change', (e) => {
+  subdivision = parseInt(e.target.value, 10);
+});
+document.getElementById('metroToggle').addEventListener('click', (e) => {
+  metronomeOn = !metronomeOn;
+  e.target.classList.toggle('on', metronomeOn);
+  e.target.textContent = metronomeOn ? '🔊' : '🔇';
 });
 
 /* ============================================================
