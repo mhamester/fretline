@@ -468,6 +468,7 @@
         <button class="metro-toggle on" id="metroToggle" title="Toggle metronome sound">🔊</button>
         <button class="metro-toggle on" id="waitToggle" title="Waiting for the correct note (tap to switch back to strict tempo)">⏸</button>
         <button class="metro-toggle on" id="onsetToggle" title="Require a fresh pluck for each note (turn off if repeated notes aren't registering)">🎯</button>
+        <button class="metro-toggle" id="loopToggle" title="Loop this practice run when it finishes">🔁</button>
       </div>
 
       <div class="tempo-row">
@@ -477,6 +478,11 @@
           <span id="micGainValue" style="font-size:12px; color: var(--ink-dim); width:28px; text-align:right;">6×</span>
         </div>
       </div>
+
+      <div class="tempo-row">
+        <button class="btn secondary" id="calibrateBtn" style="flex:1;">⏱ Calibrate Timing</button>
+      </div>
+      <div id="calibrateStatus" style="display:none; font-size:12px; color: var(--ink-dim); text-align:center; margin: -4px 0 10px;"></div>
 
       <div class="tuner">
         <div class="target">Listening for <b id="targetNote">—</b></div>
@@ -926,11 +932,12 @@ function pitchLoop() {
   // recent background level. This is what lets the app tell "you just
   // played this note again" apart from "this note is still ringing from
   // before" — essential for repeated identical notes in a row.
-  if (practiceRunning) {
+  if (practiceRunning || calibrating) {
     const now = performance.now();
     if (lastRMS > emaRMS * ONSET_RATIO && lastRMS > ONSET_MIN_RMS && (now - lastOnsetAt) > ONSET_REFRACTORY_MS) {
       noteOnsetSeen = true;
       lastOnsetAt = now;
+      if (calibrating && audioCtx) calibrationOnsetLog.push(audioCtx.currentTime);
     }
     emaRMS = emaRMS * 0.93 + lastRMS * 0.07;
   }
@@ -949,7 +956,7 @@ function pitchLoop() {
     updateWaterfallScroll(elapsed);
     updateCountInOverlay(elapsed);
     updateActiveChip(elapsed);
-    judgeTiming(elapsed);
+    judgeTiming(elapsed - calibrationOffsetSec);
   }
 
   rafId = requestAnimationFrame(pitchLoop);
@@ -985,6 +992,12 @@ let scheduleTimes = [];      // seconds offset per sequence index
 let hitWindow = 0.25;
 let practiceStartTime = 0;
 let waitMode = true;         // when true, pause on a missed window instead of moving on — on by default, best for beginners
+let loopEnabled = false;     // restart the run automatically when it finishes
+let calibrationOffsetSec = 0; // measured detection latency, applied only to hit/miss judgment — never to the visuals
+let calibrating = false;
+let calibrationClickTimes = [];
+let calibrationOnsetLog = [];
+let calibrationTimer = null;
 let onsetDetectionEnabled = true; // require a fresh pluck per note, not just sustained correct pitch
 let isPaused = false;
 let pauseStartTime = 0;
@@ -1006,6 +1019,93 @@ function scheduleClick(time, accent) {
   osc.connect(gain).connect(audioCtx.destination);
   osc.start(time);
   osc.stop(time + 0.06);
+}
+
+function scheduleCalibrationClick(time, accent) {
+  // Always audible regardless of the metronome mute toggle — calibration
+  // is meaningless without a click to play along to.
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.frequency.value = accent ? 1500 : 1000;
+  gain.gain.setValueAtTime(0.0001, time);
+  gain.gain.exponentialRampToValueAtTime(0.5, time + 0.001);
+  gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.05);
+  osc.connect(gain).connect(audioCtx.destination);
+  osc.start(time);
+  osc.stop(time + 0.06);
+}
+
+const CALIBRATION_BPM = 80;
+const CALIBRATION_BEATS = 8;
+
+async function startCalibration() {
+  if (calibrating) return;
+  if (!audioCtx || !analyser) {
+    const ok = await startMic();
+    if (!ok) return;
+  }
+  calibrating = true;
+  calibrationOnsetLog = [];
+  calibrationClickTimes = [];
+
+  const secPerBeatCal = 60 / CALIBRATION_BPM;
+  const startDelay = 0.3;
+  const calStart = audioCtx.currentTime + startDelay;
+  for (let i = 0; i < CALIBRATION_BEATS; i++) {
+    const t = calStart + i * secPerBeatCal;
+    calibrationClickTimes.push(t);
+    scheduleCalibrationClick(t, i % 4 === 0);
+  }
+
+  document.getElementById('calibrateBtn').textContent = 'Calibrating…';
+  document.getElementById('calibrateBtn').disabled = true;
+  const status = document.getElementById('calibrateStatus');
+  status.style.display = 'block';
+  status.textContent = `Pluck any note in time with each click (${CALIBRATION_BEATS} beats at ${CALIBRATION_BPM} BPM)…`;
+
+  const totalDuration = startDelay + CALIBRATION_BEATS * secPerBeatCal + 1.0;
+  calibrationTimer = setTimeout(finishCalibration, totalDuration * 1000);
+}
+
+function finishCalibration() {
+  calibrating = false;
+  document.getElementById('calibrateBtn').textContent = '⏱ Calibrate Timing';
+  document.getElementById('calibrateBtn').disabled = false;
+  const status = document.getElementById('calibrateStatus');
+
+  // Match each scheduled click to the nearest detected onset (each onset
+  // can only be claimed once) so a missed beat doesn't skew the result.
+  const usedOnsets = new Set();
+  const diffs = [];
+  for (const clickT of calibrationClickTimes) {
+    let bestIdx = -1, bestDiff = Infinity;
+    calibrationOnsetLog.forEach((onsetT, idx) => {
+      if (usedOnsets.has(idx)) return;
+      const diff = onsetT - clickT;
+      if (Math.abs(diff) < 0.4 && Math.abs(diff) < Math.abs(bestDiff)) {
+        bestDiff = diff;
+        bestIdx = idx;
+      }
+    });
+    if (bestIdx !== -1) {
+      usedOnsets.add(bestIdx);
+      diffs.push(bestDiff);
+    }
+  }
+
+  if (diffs.length < 3) {
+    status.textContent = 'Not enough taps detected — try again, plucking clearly on each click.';
+    return;
+  }
+
+  diffs.sort((a, b) => a - b);
+  const median = diffs[Math.floor(diffs.length / 2)];
+  calibrationOffsetSec = median;
+  const ms = Math.round(median * 1000);
+  status.textContent = ms === 0
+    ? `Calibrated: no detectable lag (${diffs.length}/${CALIBRATION_BEATS} taps used).`
+    : `Calibrated: detection was ${ms > 0 ? 'lagging' : 'ahead'} by ${Math.abs(ms)}ms — corrected (${diffs.length}/${CALIBRATION_BEATS} taps used).`;
 }
 
 function metronomeScheduler() {
@@ -1436,7 +1536,7 @@ function onPitchDetected(midi) {
     needle.style.background = 'var(--hit)';
     holdFrames++;
     const t = scheduleTimes[seqIndex];
-    const elapsed = getElapsed();
+    const elapsed = getElapsed() - calibrationOffsetSec;
     const withinWindow = t === undefined ? false
       : waitMode ? elapsed >= t - hitWindow
       : (elapsed >= t - hitWindow && elapsed <= t + hitWindow);
@@ -1479,13 +1579,31 @@ function updateScore() {
   document.getElementById('globalScoreVal').textContent = `${pct}% (${hits}/${done})`;
 }
 
-function finishPractice() {
-  practiceRunning = false;
-  document.getElementById('startBtn').textContent = 'Start Practice';
+function restartPracticeRun() {
+  seqIndex = 0;
+  results = new Array(currentTab.activeSequence.length).fill(null);
+  holdFrames = 0;
+  document.getElementById('globalScore').style.display = 'none';
+  startTempoEngine(); // recomputes the timeline, rebuilds the waterfall, resets pause/onset state
+  highlightCurrent();
+  updateTarget();
+}
 
+function finishPractice() {
   const done = results.filter(r => r !== null).length;
   const hits = results.filter(r => r === 'hit').length;
   const pct = done > 0 ? Math.round((hits / done) * 100) : 0;
+
+  if (loopEnabled) {
+    document.getElementById('practiceSub').textContent = waitMode
+      ? 'Complete! Looping again…'
+      : `Complete! ${pct}% (${hits}/${done}) — looping again…`;
+    restartPracticeRun();
+    return; // keep mic + practiceRunning active, just restart the timeline
+  }
+
+  practiceRunning = false;
+  document.getElementById('startBtn').textContent = 'Start Practice';
 
   if (waitMode) {
     document.getElementById('practiceSub').textContent =
@@ -1574,7 +1692,15 @@ document.getElementById('onsetToggle').addEventListener('click', (e) => {
     ? 'Require a fresh pluck for each note (turn off if repeated notes aren\'t registering)'
     : 'Onset detection off — repeated identical notes may advance from one sustained pluck';
 });
+document.getElementById('loopToggle').addEventListener('click', (e) => {
+  loopEnabled = !loopEnabled;
+  e.target.classList.toggle('on', loopEnabled);
+  e.target.title = loopEnabled
+    ? 'Looping this practice run (tap to stop looping)'
+    : 'Loop this practice run when it finishes';
+});
 document.getElementById('previewBtn').addEventListener('click', playPreview);
+document.getElementById('calibrateBtn').addEventListener('click', startCalibration);
 document.getElementById('micGainSlider').addEventListener('input', (e) => {
   micGainValue = parseFloat(e.target.value);
   document.getElementById('micGainValue').textContent = micGainValue + '×';
