@@ -981,7 +981,7 @@ function pitchLoop() {
     if (calibrating) {
       judgeCalibrationTiming(elapsed);
     } else {
-      judgeTiming(elapsed - calibrationOffsetSec);
+      judgeTiming(elapsed);
     }
   }
 
@@ -1019,7 +1019,7 @@ let hitWindow = 0.25;
 let practiceStartTime = 0;
 let waitMode = true;         // when true, pause on a missed window instead of moving on — on by default, best for beginners
 let loopEnabled = false;     // restart the run automatically when it finishes
-let calibrationOffsetSec = 0; // measured detection latency, applied only to hit/miss judgment — never to the visuals
+let calibrationOffsetSec = 0; // measured detection latency — baked into scheduleTimes so visuals and judgment always match
 let calibrating = false;
 let calibrationOnsetLog = [];
 let pendingCalibrationOnset = null; // { time, deadline } — awaiting pitch confirmation after a spike
@@ -1064,11 +1064,15 @@ async function startCalibration() {
   if (calibrating) return;
 
   // Cleanly stop whatever's currently loaded/running, and remember it so
-  // we can restore it exactly once calibration finishes.
+  // we can restore it exactly once calibration finishes. Also stash the
+  // previous calibration offset and zero it out — a calibration run must
+  // always measure against a clean, unshifted grid, or the result would
+  // only reflect the residual error on top of the old correction.
   calibrationSaved = {
     currentTab, bpm, subdivision, waitMode, loopEnabled,
-    seqIndex, results
+    seqIndex, results, previousOffset: calibrationOffsetSec
   };
+  calibrationOffsetSec = 0;
   if (practiceRunning) { practiceRunning = false; stopTempoEngine(); stopMic(); }
   if (previewPlaying) stopPreview();
 
@@ -1116,9 +1120,11 @@ async function startCalibration() {
   const ok = await startMic();
   if (!ok) {
     calibrating = false;
+    const previousOffset = calibrationSaved ? calibrationSaved.previousOffset : 0;
     document.getElementById('calibrateBtn').textContent = '⏱ Calibrate Timing';
     document.getElementById('calibrateBtn').disabled = false;
     restoreAfterCalibration();
+    calibrationOffsetSec = previousOffset;
     return;
   }
   practiceRunning = true;
@@ -1180,11 +1186,13 @@ function finishCalibrationRun() {
     }
   }
 
+  const previousOffset = calibrationSaved ? calibrationSaved.previousOffset : 0;
   restoreAfterCalibration();
 
   const status = document.getElementById('calibrateStatus');
   status.style.display = 'block';
   if (diffs.length < 3) {
+    calibrationOffsetSec = previousOffset;
     status.textContent = 'Not enough taps detected — try again, plucking clearly on each beat.';
     return;
   }
@@ -1196,6 +1204,7 @@ function finishCalibrationRun() {
   // an echo, or a beat played very off-tempo) rather than genuine lag —
   // applying it would do more harm than good, so reject and ask for a retry.
   if (Math.abs(median) > 0.35) {
+    calibrationOffsetSec = previousOffset;
     status.textContent =
       `Unexpected result (${Math.round(median * 1000)}ms) — that's larger than real detection lag should be. Try again, plucking cleanly right on each beat.`;
     return;
@@ -1255,7 +1264,12 @@ function startTempoEngine() {
   secPerChar = secPerBeat / subdivision;
   countInSeconds = COUNT_IN_BEATS * secPerBeat;
   hitWindow = computeHitWindow(bpm);
-  scheduleTimes = currentTab.activeSequence.map(g => countInSeconds + g.col * secPerChar);
+  // The calibration offset is baked directly into the schedule itself
+  // (not applied as a separate "judgment-only" shift) — that keeps the
+  // note's visual crossing and its judgment window perfectly locked
+  // together, so "the note at the hitline" is always the note being
+  // evaluated, no matter what the offset is.
+  scheduleTimes = currentTab.activeSequence.map(g => countInSeconds + g.col * secPerChar + calibrationOffsetSec);
   isPaused = false;
   totalPausedDuration = 0;
   noteOnsetSeen = false;
@@ -1671,7 +1685,7 @@ function onPitchDetected(midi) {
     needle.style.background = 'var(--hit)';
     holdFrames++;
     const t = scheduleTimes[seqIndex];
-    const elapsed = getElapsed() - calibrationOffsetSec;
+    const elapsed = getElapsed();
     const withinWindow = t === undefined ? false
       : waitMode ? elapsed >= t - hitWindow
       : (elapsed >= t - hitWindow && elapsed <= t + hitWindow);
@@ -1760,6 +1774,7 @@ function finishPractice() {
 function cancelCalibration() {
   calibrating = false;
   practiceRunning = false;
+  const previousOffset = calibrationSaved ? calibrationSaved.previousOffset : 0;
   stopTempoEngine();
   stopMic();
   document.getElementById('startBtn').textContent = 'Start Practice';
@@ -1769,6 +1784,7 @@ function cancelCalibration() {
   status.style.display = 'block';
   status.textContent = 'Calibration cancelled.';
   restoreAfterCalibration();
+  calibrationOffsetSec = previousOffset;
 }
 
 document.getElementById('startBtn').addEventListener('click', async () => {
