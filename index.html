@@ -1828,6 +1828,8 @@ document.getElementById('startBtn').addEventListener('click', async () => {
     seqIndex = 0;
     results = new Array(currentTab.activeSequence.length).fill(null);
     document.getElementById('globalScore').style.display = 'none';
+    highlightCurrent(); // Classic Tab view keeps its old hit/miss classes otherwise — the waterfall
+                         // doesn't have this problem since buildWaterfall() rebuilds it from scratch
   }
 
   const ok = await startMic();
