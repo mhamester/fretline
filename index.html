@@ -1470,15 +1470,21 @@ function updateWaterfallResult(idx, status) {
 function judgeTiming(elapsed) {
   if (!currentTab || seqIndex >= currentTab.activeSequence.length) return;
   const t = scheduleTimes[seqIndex];
-  if (results[seqIndex] === null && elapsed > t + hitWindow) {
+  if (results[seqIndex] === null) {
     if (waitMode) {
-      if (!isPaused) {
+      // Freeze right at the note's scheduled crossing (not after it's
+      // already scrolled past by a full hitWindow) — that's what keeps
+      // the frozen chip sitting exactly on the hitline while waiting,
+      // instead of noticeably past it. A small grace avoids freezing on
+      // a hair's-width of timing jitter.
+      const freezeGrace = 0.05;
+      if (elapsed > t + freezeGrace && !isPaused) {
         isPaused = true;
         pauseStartTime = audioCtx.currentTime;
+        // Frozen here until the correct note is played — see markResult(),
+        // which resumes the clock the moment a hit is registered.
       }
-      // Frozen here until the correct note is played — see markResult(),
-      // which resumes the clock the moment a hit is registered.
-    } else {
+    } else if (elapsed > t + hitWindow) {
       markResult('miss'); // time's up for this note — keep the tempo flowing
     }
   }
