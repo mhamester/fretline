@@ -1190,6 +1190,17 @@ function finishCalibrationRun() {
   }
   diffs.sort((a, b) => a - b);
   const median = diffs[Math.floor(diffs.length / 2)];
+
+  // Sanity check: real system latency is very unlikely to exceed ~350ms.
+  // A result beyond that almost certainly means a mismatched onset (e.g.
+  // an echo, or a beat played very off-tempo) rather than genuine lag —
+  // applying it would do more harm than good, so reject and ask for a retry.
+  if (Math.abs(median) > 0.35) {
+    status.textContent =
+      `Unexpected result (${Math.round(median * 1000)}ms) — that's larger than real detection lag should be. Try again, plucking cleanly right on each beat.`;
+    return;
+  }
+
   calibrationOffsetSec = median;
   const ms = Math.round(median * 1000);
   status.textContent = ms === 0
@@ -1201,6 +1212,13 @@ function restoreAfterCalibration() {
   if (!calibrationSaved) return;
   ({ currentTab, bpm, subdivision, waitMode, loopEnabled, seqIndex, results } = calibrationSaved);
   calibrationSaved = null;
+
+  // Clear the waterfall's chip layer — it still holds the calibration
+  // run's positions, which are meaningless (and mismatched) for whatever
+  // tab we're restoring. It'll be rebuilt fresh the next time Start
+  // Practice runs (that's the only place valid scheduleTimes exist).
+  const layer = document.getElementById('wfNotesLayer');
+  if (layer) { layer.innerHTML = ''; layer.style.transform = 'translateX(0px)'; }
 
   document.getElementById('bpmInput').value = bpm;
   document.getElementById('gridSelect').value = subdivision;
@@ -1472,6 +1490,9 @@ function setActiveSection(mode) {
 
   seqIndex = 0;
   results = new Array(currentTab.activeSequence.length).fill(null);
+
+  const layer = document.getElementById('wfNotesLayer');
+  if (layer) { layer.innerHTML = ''; layer.style.transform = 'translateX(0px)'; }
 
   const label = mode === 'whole' ? 'Whole Song' : currentTab.parsed.sections[mode].label;
   document.getElementById('practiceSub').textContent = `Practicing: ${label} — tap Start, then play along`;
