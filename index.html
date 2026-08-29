@@ -477,6 +477,9 @@
           <input type="range" id="micGainSlider" min="1" max="12" step="0.5" value="6" style="flex:1; accent-color: var(--brass);">
           <span id="micGainValue" style="font-size:12px; color: var(--ink-dim); width:28px; text-align:right;">6×</span>
         </div>
+        <label style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--ink-dim); flex-shrink:0;">
+          <input type="checkbox" id="debugToggle"> debug
+        </label>
       </div>
 
       <div class="tempo-row">
@@ -489,6 +492,8 @@
         <div class="meter"><div class="center-mark"></div><div class="needle" id="needle"></div></div>
         <div class="heard" id="heardNote">Mic idle</div>
       </div>
+
+      <div id="debugReadout" style="display:none; font-size:11px; font-family:monospace; color:var(--ink-dim); background:var(--bg-raised); border:1px solid var(--line); border-radius:8px; padding:6px 10px; margin-bottom:8px; white-space:pre-line;"></div>
 
       <div class="section-picker" id="sectionPicker" style="display:none;"></div>
 
@@ -738,6 +743,7 @@ let analyser = null;
 let micStream = null;
 let inputGainNode = null;
 let micGainValue = 6; // digital boost applied before pitch detection — helps quiet/distant playing register
+let debugMode = false;
 let rafId = null;
 let smoothedMidi = null;
 let lastRMS = 0;
@@ -982,6 +988,15 @@ function pitchLoop() {
       judgeCalibrationTiming(elapsed);
     } else {
       judgeTiming(elapsed);
+    }
+
+    if (debugMode) {
+      const t = scheduleTimes[seqIndex];
+      const chipScreenX = (t !== undefined) ? Math.round(LANE_OFFSET + 26 + (t - elapsed) * PX_PER_SEC) : NaN;
+      document.getElementById('debugReadout').textContent =
+        `seqIndex=${seqIndex}  t=${t !== undefined ? t.toFixed(3) : '—'}  elapsed=${elapsed.toFixed(3)}\n` +
+        `(t-elapsed)=${t !== undefined ? (t - elapsed).toFixed(3) : '—'}s   hitWindow=${hitWindow.toFixed(3)}s   isPaused=${isPaused}\n` +
+        `chip screenX=${chipScreenX}px   hitline=62px   calibOffset=${(calibrationOffsetSec*1000).toFixed(0)}ms`;
     }
   }
 
@@ -1804,6 +1819,17 @@ document.getElementById('startBtn').addEventListener('click', async () => {
     return;
   }
   if (previewPlaying) stopPreview();
+
+  // If the previous run finished naturally, seqIndex now sits past the
+  // end of the sequence. Start Practice always visually restarts the
+  // waterfall from scratch, so the judgment logic needs to restart too —
+  // otherwise it just sees "already done" and never listens for anything.
+  if (seqIndex >= currentTab.activeSequence.length) {
+    seqIndex = 0;
+    results = new Array(currentTab.activeSequence.length).fill(null);
+    document.getElementById('globalScore').style.display = 'none';
+  }
+
   const ok = await startMic();
   if (!ok) return;
   practiceRunning = true;
@@ -1883,6 +1909,10 @@ document.getElementById('micGainSlider').addEventListener('input', (e) => {
   micGainValue = parseFloat(e.target.value);
   document.getElementById('micGainValue').textContent = micGainValue + '×';
   if (inputGainNode) inputGainNode.gain.value = micGainValue;
+});
+document.getElementById('debugToggle').addEventListener('change', (e) => {
+  debugMode = e.target.checked;
+  document.getElementById('debugReadout').style.display = debugMode ? 'block' : 'none';
 });
 
 /* ============================================================
