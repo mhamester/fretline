@@ -129,6 +129,25 @@
   .song-card .meta { font-size: 12px; color: var(--ink-dim); margin-top: 3px; }
   .song-card .go { color: var(--brass); font-size: 20px; }
 
+  .scales-box {
+    margin-top: 18px;
+    padding-top: 18px;
+    padding-bottom: 18px;
+    border-top: 1px solid var(--line);
+  }
+  .scales-box h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-dim); margin: 0 0 10px; }
+  .scale-field {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--bg-raised); border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 12px; margin-bottom: 8px;
+  }
+  .scale-field label { flex: 1; font-size: 14px; font-weight: 600; }
+  .scale-field input[type=number] {
+    width: 46px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+    color: var(--ink); padding: 6px 4px; text-align: center; font-size: 14px;
+  }
+  .scale-root-label { color: var(--brass); font-weight: 700; font-size: 13px; width: 22px; text-align: center; flex-shrink: 0; }
+
   .import-box {
     margin-top: 18px;
     padding-top: 18px;
@@ -425,6 +444,22 @@
   <section id="view-library" class="active">
     <div class="song-list" id="songList"></div>
 
+    <div class="scales-box">
+      <h3>Scales Practice</h3>
+      <div class="scale-field">
+        <label>Minor Pentatonic</label>
+        <input type="number" id="pentatonicFret" min="0" max="12" value="5">
+        <span class="scale-root-label" id="pentatonicRootName">A</span>
+        <button class="btn secondary" id="loadPentatonicBtn">Load</button>
+      </div>
+      <div class="scale-field">
+        <label>Blues Scale</label>
+        <input type="number" id="bluesFret" min="0" max="12" value="5">
+        <span class="scale-root-label" id="bluesRootName">A</span>
+        <button class="btn secondary" id="loadBluesBtn">Load</button>
+      </div>
+    </div>
+
     <div class="import-box">
       <h3>Import your own tab</h3>
       <div class="field-row">
@@ -477,9 +512,6 @@
           <input type="range" id="micGainSlider" min="1" max="12" step="0.5" value="6" style="flex:1; accent-color: var(--brass);">
           <span id="micGainValue" style="font-size:12px; color: var(--ink-dim); width:28px; text-align:right;">6×</span>
         </div>
-        <label style="display:flex; align-items:center; gap:4px; font-size:11px; color:var(--ink-dim); flex-shrink:0;">
-          <input type="checkbox" id="debugToggle"> debug
-        </label>
       </div>
 
       <div class="tempo-row">
@@ -492,8 +524,6 @@
         <div class="meter"><div class="center-mark"></div><div class="needle" id="needle"></div></div>
         <div class="heard" id="heardNote">Mic idle</div>
       </div>
-
-      <div id="debugReadout" style="display:none; font-size:11px; font-family:monospace; color:var(--ink-dim); background:var(--bg-raised); border:1px solid var(--line); border-radius:8px; padding:6px 10px; margin-bottom:8px; white-space:pre-line;"></div>
 
       <div class="section-picker" id="sectionPicker" style="display:none;"></div>
 
@@ -685,18 +715,6 @@ function midiToFreq(midi) {
 
 const LIBRARY = [
   {
-    id: 'warmup-frets',
-    title: 'Warm-Up: Open Position Run',
-    meta: 'Beginner · single notes',
-    tab:
-`e|----------------0-1-3-|
-B|------------0-1-------|
-G|--------0-2------------|
-D|----0-2----------------|
-A|------------------------|
-E|------------------------|`
-  },
-  {
     id: 'ode-to-joy',
     title: 'Ode to Joy (full theme)',
     meta: 'Traditional · Beethoven — full 8-bar melody',
@@ -719,18 +737,6 @@ G|2---------------0-2-----2-2-1-2---1---2---------------0-2-------2-1---1-2-2-2-
 D|------------------------------------2-------------------------------4-----------------------------------------2---------------------------4----------|
 A|-----------------------------------------------------------------------------------------------------------------------------------------------------|
 E|-----------------------------------------------------------------------------------------------------------------------------------------------------|`
-  },
-  {
-    id: 'waterfall-demo',
-    title: 'Waterfall Demo',
-    meta: 'Original · all 6 strings, wide fretboard range',
-    tab:
-`e|--------------------0-3-1------|
-B|----------------0-3-------1----|
-G|------------0-2-------------0--|
-D|--------0-2-------------------2|
-A|----0-2------------------------|
-E|0-3----------------------------|`
   }
 ];
 
@@ -743,7 +749,6 @@ let analyser = null;
 let micStream = null;
 let inputGainNode = null;
 let micGainValue = 6; // digital boost applied before pitch detection — helps quiet/distant playing register
-let debugMode = false;
 let rafId = null;
 let smoothedMidi = null;
 let lastRMS = 0;
@@ -988,15 +993,6 @@ function pitchLoop() {
       judgeCalibrationTiming(elapsed);
     } else {
       judgeTiming(elapsed);
-    }
-
-    if (debugMode) {
-      const t = scheduleTimes[seqIndex];
-      const chipScreenX = (t !== undefined) ? Math.round(LANE_OFFSET + 26 + (t - elapsed) * PX_PER_SEC) : NaN;
-      document.getElementById('debugReadout').textContent =
-        `seqIndex=${seqIndex}  t=${t !== undefined ? t.toFixed(3) : '—'}  elapsed=${elapsed.toFixed(3)}\n` +
-        `(t-elapsed)=${t !== undefined ? (t - elapsed).toFixed(3) : '—'}s   hitWindow=${hitWindow.toFixed(3)}s   isPaused=${isPaused}\n` +
-        `chip screenX=${chipScreenX}px   hitline=62px   calibOffset=${(calibrationOffsetSec*1000).toFixed(0)}ms`;
     }
   }
 
@@ -1912,10 +1908,6 @@ document.getElementById('micGainSlider').addEventListener('input', (e) => {
   document.getElementById('micGainValue').textContent = micGainValue + '×';
   if (inputGainNode) inputGainNode.gain.value = micGainValue;
 });
-document.getElementById('debugToggle').addEventListener('change', (e) => {
-  debugMode = e.target.checked;
-  document.getElementById('debugReadout').style.display = debugMode ? 'block' : 'none';
-});
 
 /* ============================================================
    5. LIBRARY UI + IMPORT
@@ -1932,6 +1924,83 @@ function renderLibrary() {
     list.appendChild(card);
   });
 }
+
+/* ---- Scales: minor pentatonic and blues, movable to any root fret ----
+   Built from the standard "box 1" shape (verified against scale theory):
+   minor pentatonic = root, m3, 4, 5, m7; blues adds the b5 "blue note". */
+
+function noteLetterName(fret) {
+  const names = ['E','F','F#','G','G#','A','A#','B','C','C#','D','D#'];
+  return names[((fret % 12) + 12) % 12];
+}
+
+function pentatonicSequence(P) {
+  const up = [
+    ['E', P], ['E', P + 3],
+    ['A', P], ['A', P + 2],
+    ['D', P], ['D', P + 2],
+    ['G', P], ['G', P + 2],
+    ['B', P], ['B', P + 3],
+    ['e', P], ['e', P + 3],
+  ];
+  return up.concat([...up].reverse());
+}
+
+function bluesSequence(P) {
+  const up = [
+    ['E', P], ['E', P + 3],
+    ['A', P], ['A', P + 1], ['A', P + 2],
+    ['D', P], ['D', P + 2],
+    ['G', P], ['G', P + 2], ['G', P + 3],
+    ['B', P], ['B', P + 3],
+    ['e', P], ['e', P + 3],
+  ];
+  return up.concat([...up].reverse());
+}
+
+function buildScaleTabText(sequence, step = 2) {
+  const stringKeys = ['e', 'B', 'G', 'D', 'A', 'E'];
+  const totalLen = (sequence.length - 1) * step + 1;
+  const lines = {};
+  stringKeys.forEach(k => { lines[k] = new Array(totalLen).fill('-'); });
+  sequence.forEach(([sk, fret], i) => {
+    const pos = i * step;
+    String(fret).split('').forEach((d, j) => { lines[sk][pos + j] = d; });
+  });
+  return stringKeys.map(k => k + '|' + lines[k].join('') + '|').join('\n');
+}
+
+function updateScaleRootLabels() {
+  const pf = parseInt(document.getElementById('pentatonicFret').value, 10) || 0;
+  const bf = parseInt(document.getElementById('bluesFret').value, 10) || 0;
+  document.getElementById('pentatonicRootName').textContent = noteLetterName(pf);
+  document.getElementById('bluesRootName').textContent = noteLetterName(bf);
+}
+
+document.getElementById('pentatonicFret').addEventListener('input', updateScaleRootLabels);
+document.getElementById('bluesFret').addEventListener('input', updateScaleRootLabels);
+
+document.getElementById('loadPentatonicBtn').addEventListener('click', () => {
+  const P = Math.max(0, parseInt(document.getElementById('pentatonicFret').value, 10) || 0);
+  const root = noteLetterName(P);
+  loadTab({
+    title: `${root} Minor Pentatonic (fret ${P})`,
+    meta: 'Scale practice · box 1 shape',
+    tab: buildScaleTabText(pentatonicSequence(P))
+  });
+});
+
+document.getElementById('loadBluesBtn').addEventListener('click', () => {
+  const P = Math.max(0, parseInt(document.getElementById('bluesFret').value, 10) || 0);
+  const root = noteLetterName(P);
+  loadTab({
+    title: `${root} Blues Scale (fret ${P})`,
+    meta: 'Scale practice · box 1 shape + blue note',
+    tab: buildScaleTabText(bluesSequence(P))
+  });
+});
+
+updateScaleRootLabels();
 
 document.getElementById('importBtn').addEventListener('click', () => {
   const title = document.getElementById('importTitle').value.trim() || 'My tab';
